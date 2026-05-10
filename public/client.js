@@ -7,6 +7,7 @@ const state = {
   radioNoiseGain: null,
   radioNoiseCrackleGain: null,
   radioNoiseFlutterDepth: null,
+  blockingToneGain: null,
   selfId: null,
   selfName: "",
   peers: new Map(),
@@ -303,6 +304,24 @@ function initAudioEngine() {
   const crackleGain = ctx.createGain();
   crackleGain.gain.value = 0;
 
+  const blockingToneGain = ctx.createGain();
+  blockingToneGain.gain.value = 0;
+
+  const blockOscA = ctx.createOscillator();
+  blockOscA.type = "sine";
+  blockOscA.frequency.value = 910;
+
+  const blockOscB = ctx.createOscillator();
+  blockOscB.type = "square";
+  blockOscB.frequency.value = 1280;
+
+  const blockWobble = ctx.createOscillator();
+  blockWobble.type = "triangle";
+  blockWobble.frequency.value = 19;
+
+  const blockWobbleDepth = ctx.createGain();
+  blockWobbleDepth.gain.value = 10;
+
   const noiseFlutter = ctx.createOscillator();
   noiseFlutter.type = "triangle";
   noiseFlutter.frequency.value = 5.2;
@@ -322,18 +341,30 @@ function initAudioEngine() {
   noiseFlutter.connect(noiseFlutterDepth);
   noiseFlutterDepth.connect(noiseGain.gain);
 
+  blockWobble.connect(blockWobbleDepth);
+  blockWobbleDepth.connect(blockOscA.frequency);
+  blockWobbleDepth.connect(blockOscB.frequency);
+
+  blockOscA.connect(blockingToneGain);
+  blockOscB.connect(blockingToneGain);
+
   noiseGain.connect(masterGain);
   crackleGain.connect(masterGain);
+  blockingToneGain.connect(masterGain);
 
   hissSource.start();
   crackleSource.start();
   noiseFlutter.start();
+  blockOscA.start();
+  blockOscB.start();
+  blockWobble.start();
 
   state.audioCtx = ctx;
   state.masterOutput = masterGain;
   state.radioNoiseGain = noiseGain;
   state.radioNoiseCrackleGain = crackleGain;
   state.radioNoiseFlutterDepth = noiseFlutterDepth;
+  state.blockingToneGain = blockingToneGain;
 
   loadRogerBeepSample().catch(() => {
     // Ignore lazy load failures and keep fallback tone.
@@ -380,6 +411,26 @@ function cutNoiseNow() {
     state.radioNoiseFlutterDepth.gain.cancelScheduledValues(now);
     state.radioNoiseFlutterDepth.gain.setValueAtTime(0, now);
   }
+}
+
+function shouldPlayBlockingTone() {
+  const hasContention = Boolean(state.currentHolderId) && state.currentQueue.length > 0;
+  const hasActiveRx = Boolean(state.activeSpeakerId);
+  const selfIsHolder = Boolean(state.selfId) && state.selfId === state.currentHolderId;
+  const selfIsQueued = Boolean(state.selfId) && state.currentQueue.includes(state.selfId);
+  const selfIsTransmitting = state.txGranted || state.isPttPressed;
+  return hasContention && hasActiveRx && !selfIsHolder && !selfIsQueued && !selfIsTransmitting;
+}
+
+function syncBlockingTone() {
+  if (!state.audioCtx || !state.blockingToneGain) {
+    return;
+  }
+
+  const now = state.audioCtx.currentTime;
+  const active = shouldPlayBlockingTone();
+  state.blockingToneGain.gain.cancelScheduledValues(now);
+  state.blockingToneGain.gain.setTargetAtTime(active ? 0.013 : 0, now, 0.03);
 }
 
 function playRogerBeep() {
@@ -818,6 +869,7 @@ function applyTxState(payload) {
 
   state.lastRxActive = isReceivingAudio;
   updateNoiseLevel(isReceivingAudio);
+  syncBlockingTone();
 
   if (!payload.active) {
     setChannelState("Channel idle");
@@ -842,6 +894,7 @@ function setTx(enabled) {
   }
 
   updateSelfStatus();
+  syncBlockingTone();
 }
 
 function updatePresence() {
@@ -1030,14 +1083,18 @@ async function join() {
     state.selfName = "";
     state.currentHolderId = null;
     state.currentQueue = [];
+    state.activeSpeakerId = null;
+    state.activeChannel = null;
     state.peers.clear();
     refreshPeerList();
     updateSelfStatus();
+    syncBlockingTone();
   };
 
   state.ws.onerror = () => {
     setPowerState("off");
     setServerStatus("Server: connection error");
+    syncBlockingTone();
   };
 
   state.ws.onmessage = async (event) => {
@@ -1179,6 +1236,7 @@ async function join() {
       state.currentQueue = Array.isArray(msg.payload.queue) ? msg.payload.queue : [];
       refreshPeerList();
       updateSelfStatus();
+      syncBlockingTone();
       return;
     }
 
@@ -1219,6 +1277,7 @@ function pttDown() {
   initAudioEngine();
   unlockRemoteAudio();
   muteAllPeers(true);
+  syncBlockingTone();
   playPttClick(true);
   wsSend("ptt-request", { channel: FIXED_CHANNEL });
 }
@@ -1234,6 +1293,7 @@ function pttUp() {
   playPttClick(false);
   cutNoiseNow();
   applyCurrentMonitorRouting();
+  syncBlockingTone();
 }
 
 function forcePttRelease() {
