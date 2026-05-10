@@ -3,7 +3,7 @@ builder = "nixpacks"
 
 [deploy]
 startCommand = "node server.js"
-healthcheckPath = "/api/rooms"
+healthcheckPath = "/healthz"
 healthcheckTimeout = 30
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3

@@ -30,6 +30,7 @@ const RATE_LIMIT_WINDOW_MS = Math.max(1000, Number(process.env.RATE_LIMIT_WINDOW
 const RATE_LIMIT_AUTH_MAX = Math.max(1, Number(process.env.RATE_LIMIT_AUTH_MAX) || 10);
 const RATE_LIMIT_WS_MAX = Math.max(1, Number(process.env.RATE_LIMIT_WS_MAX) || 60);
 const AUTH_COOKIE_NAME = "openbve_auth";
+const HEALTHCHECK_PATH = "/healthz";
 const DEFAULT_ROOM_ID = "mta-main";
 const DEFAULT_CHANNEL = "operations";
 const ALLOWED_ROLES = new Set(["operator", "tower"]);
@@ -298,6 +299,11 @@ app.use((req, res, next) => {
 });
 
 app.use((req, res, next) => {
+  if (req.path === HEALTHCHECK_PATH) {
+    next();
+    return;
+  }
+
   if (!REQUIRE_HTTPS) {
     next();
     return;
@@ -313,6 +319,11 @@ app.use((req, res, next) => {
 });
 
 app.use((req, res, next) => {
+  if (req.path === HEALTHCHECK_PATH) {
+    next();
+    return;
+  }
+
   const ip = getClientIpFromRequest(req);
   if (!isAllowedIp(ip)) {
     res.status(403).json({ error: "IP_BLOCKED", message: "IP not allowed." });
@@ -425,8 +436,17 @@ app.post("/auth/logout", (_req, res) => {
   res.json({ ok: true });
 });
 
+app.get(HEALTHCHECK_PATH, (_req, res) => {
+  res.status(200).json({ ok: true, status: "healthy" });
+});
+
 function httpAuthMiddleware(req, res, next) {
-  if (!AUTH_ENABLED || req.path.startsWith("/auth/") || req.path === "/login") {
+  if (
+    !AUTH_ENABLED ||
+    req.path.startsWith("/auth/") ||
+    req.path === "/login" ||
+    req.path === HEALTHCHECK_PATH
+  ) {
     next();
     return;
   }
