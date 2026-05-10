@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MTA Subway Radio Simulator</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="title-panel">
+        <h1>MTA Subway Radio Simulator</h1>
+        <p>Portable radio console for one shared operations channel.</p>
+      </section>
+
+      <div class="apx-wrapper">
+
+        <!-- Antenna -->
+        <div class="apx-antenna" aria-hidden="true">
+          <div class="apx-antenna-tip"></div>
+          <div class="apx-antenna-whip"></div>
+          <div class="apx-antenna-coupling"></div>
+        </div>
+
+        <!-- Radio chassis -->
+        <section class="apx-radio power-off" id="radioFrame" aria-label="Motorola APX 6000 radio console">
+
+          <!-- Side PTT bar — left edge, functional -->
+          <button class="apx-ptt-bar" id="pttBtn" disabled aria-label="Push to Talk">
+            <span class="apx-ptt-label">PTT</span>
+            <span class="apx-ptt-indicator"></span>
+          </button>
+
+          <!-- Side emergency nub — right edge, decorative -->
+          <div class="apx-emergency-nub" aria-hidden="true"></div>
+
+          <!-- Top housing with knobs and Motorola badge -->
+          <div class="apx-top-housing" aria-hidden="true">
+            <div class="apx-knob apx-vol">
+              <div class="apx-knob-grip"></div>
+              <span class="apx-knob-mark"></span>
+            </div>
+            <div class="apx-moto-badge">
+              <svg class="apx-moto-svg" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+                <circle cx="50" cy="50" r="46" fill="#ddd5be" stroke="#b09c6a" stroke-width="3"/>
+                <path d="M17,74 L17,32 L50,56 L83,32 L83,74 L73,74 L73,46 L50,64 L27,46 L27,74 Z" fill="#1a1a1a"/>
+              </svg>
+            </div>
+            <div class="apx-knob apx-ch">
+              <div class="apx-knob-grip"></div>
+              <span class="apx-knob-mark"></span>
+            </div>
+            <div class="apx-top-ports">
+              <div class="apx-port apx-port-round"></div>
+              <div class="apx-port apx-port-rect"></div>
+              <div class="apx-port apx-port-rect"></div>
+            </div>
+          </div>
+
+          <!-- Main face -->
+          <div class="apx-face">
+
+            <!-- Speaker grille — horizontal slots -->
+            <div class="apx-speaker" aria-hidden="true">
+              <div class="apx-slot"></div>
+              <div class="apx-slot"></div>
+              <div class="apx-slot"></div>
+              <div class="apx-slot"></div>
+              <div class="apx-slot"></div>
+              <div class="apx-slot"></div>
+            </div>
+
+            <!-- Display bezel + screen -->
+            <div class="apx-display-bezel">
+              <div class="apx-display">
+                <div class="apx-status-bar">
+                  <span class="apx-zone-id">MTA OPS</span>
+                  <div class="apx-status-icons">
+                    <span class="apx-rssi" aria-hidden="true">▂▄▆</span>
+                    <span class="apx-bat-icon" aria-hidden="true">▪▪▪</span>
+                    <span class="status-led"></span>
+                  </div>
+                </div>
+                <div class="apx-ch-name">Operations</div>
+                <div class="apx-info-rows">
+                  <div id="channelState" class="apx-ch-state">Channel idle</div>
+                  <div id="status" class="apx-conn">Not connected</div>
+                  <div id="serverStatus" class="apx-small-line">Server: disconnected</div>
+                  <div id="userStatus" class="apx-small-line">User: offline</div>
+                </div>
+                <div class="apx-mic-strip">
+                  <canvas id="micCanvas" width="200" height="22"></canvas>
+                </div>
+              </div>
+            </div>
+
+            <!-- Softkey row — below display -->
+            <div class="apx-softkey-row">
+              <button class="apx-sk" aria-hidden="true" tabindex="-1">ZONE</button>
+              <button id="cleanCheckBtn" class="apx-sk clean-check" type="button">CHK</button>
+              <button class="apx-sk" aria-hidden="true" tabindex="-1">SCAN</button>
+              <button id="joinBtn" class="apx-sk apx-pwr join">PWR</button>
+            </div>
+
+            <!-- Navigation cluster -->
+            <div class="apx-nav" aria-hidden="true">
+              <button class="apx-fn-btn">◀</button>
+              <div class="apx-dpad">
+                <button class="apx-dpad-btn apx-dpad-up">▲</button>
+                <div class="apx-dpad-row">
+                  <button class="apx-dpad-btn apx-dpad-lt">◀</button>
+                  <button class="apx-dpad-btn apx-dpad-ok">OK</button>
+                  <button class="apx-dpad-btn apx-dpad-rt">▶</button>
+                </div>
+                <button class="apx-dpad-btn apx-dpad-dn">▼</button>
+              </div>
+              <button class="apx-fn-btn">▶</button>
+            </div>
+
+            <!-- Configuration panel -->
+            <div class="apx-config">
+              <div class="apx-cfg-row">
+                <label class="apx-lbl">
+                  <span>Role</span>
+                  <select id="role">
+                    <option value="operator">Operator</option>
+                    <option value="tower">Tower</option>
+                  </select>
+                </label>
+                <label class="apx-lbl">
+                  <span>Line</span>
+                  <select id="line">
+                    <option value="A">A</option>
+                    <option value="B">B</option>
+                    <option value="C">C</option>
+                    <option value="D">D</option>
+                    <option value="E">E</option>
+                  </select>
+                </label>
+              </div>
+              <label class="apx-lbl apx-lbl-full">
+                <span>Train ID</span>
+                <input id="trainId" type="text" value="R160-01" />
+              </label>
+            </div>
+
+            <!-- Numeric keypad (decorative) -->
+            <div class="apx-keypad" aria-hidden="true">
+              <button class="apx-key" tabindex="-1">1</button>
+              <button class="apx-key" tabindex="-1">2<sub>ABC</sub></button>
+              <button class="apx-key" tabindex="-1">3<sub>DEF</sub></button>
+              <button class="apx-key" tabindex="-1">4<sub>GHI</sub></button>
+              <button class="apx-key" tabindex="-1">5<sub>JKL</sub></button>
+              <button class="apx-key" tabindex="-1">6<sub>MNO</sub></button>
+              <button class="apx-key" tabindex="-1">7<sub>PQRS</sub></button>
+              <button class="apx-key" tabindex="-1">8<sub>TUV</sub></button>
+              <button class="apx-key" tabindex="-1">9<sub>WXYZ</sub></button>
+              <button class="apx-key apx-key-star" tabindex="-1">★</button>
+              <button class="apx-key" tabindex="-1">0</button>
+              <button class="apx-key apx-key-hash" tabindex="-1">#</button>
+            </div>
+
+            <!-- Active units -->
+            <div class="apx-units">
+              <div class="apx-units-hdr">◉ Active Units</div>
+              <ul id="peers" class="apx-units-list"></ul>
+            </div>
+
+          </div><!-- /apx-face -->
+
+          <!-- Battery pack -->
+          <div class="apx-battery" aria-hidden="true">
+            <div class="apx-bat-body">
+              <div class="apx-bat-contacts">
+                <span></span><span></span><span></span><span></span>
+              </div>
+            </div>
+          </div>
+
+        </section><!-- /apx-radio -->
+      </div><!-- /apx-wrapper -->
+
+    </main>
+    <script src="client.js"></script>
+  </body>
+</html>

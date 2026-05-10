@@ -1,0 +1,828 @@
+/* ─────────────────────────────────────────────────────────────
+   MTA Subway Radio Simulator — Motorola APX 6000 UI Theme
+   ───────────────────────────────────────────────────────────── */
+:root {
+  /* Chassis */
+  --chassis-base:    #1c1c1c;
+  --chassis-mid:     #222222;
+  --chassis-hi:      #2e2e2e;
+  --chassis-edge:    #111111;
+  /* Face */
+  --face-bg:         #202020;
+  --face-hi:         #2a2a2a;
+  /* Display */
+  --lcd-bg:          #b8c8a8;
+  --lcd-dark:        #9aad88;
+  --lcd-statusbar:   #1e3018;
+  --lcd-text:        #0e1f0a;
+  --lcd-muted:       #3a5530;
+  /* Hardware */
+  --knob-dark:       #141414;
+  --knob-mid:        #282828;
+  --knob-hi:         #484848;
+  --screw:           #303030;
+  /* Buttons */
+  --btn-bg:          #252525;
+  --btn-hi:          #303030;
+  --btn-border:      #0e0e0e;
+  --btn-text:        #cccccc;
+  /* Battery contacts */
+  --contact-gold:    #c8971e;
+  /* Status LED */
+  --led-off:         #5b0b10;
+  --led-connecting:  #c88820;
+  --led-on:          #30a060;
+  /* PTT */
+  --ptt-idle:        #1e1e1e;
+  --ptt-active:      #3f9b66;
+  /* Accent / power button */
+  --accent:          #d4a018;
+  /* Text */
+  --text-main:       #d0d0d0;
+  --text-muted:      #888888;
+  /* Fonts */
+  --font-ui:    "Rajdhani", "Trebuchet MS", sans-serif;
+  --font-lcd:   "Share Tech Mono", "Consolas", monospace;
+}
+
+/* ── Reset ── */
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: var(--font-ui);
+  color: var(--text-main);
+  background:
+    radial-gradient(ellipse at 15% 10%, #2e3a46 0%, transparent 50%),
+    radial-gradient(ellipse at 85% 90%, #151c24 0%, transparent 50%),
+    linear-gradient(150deg, #232c36 0%, #101418 100%);
+}
+
+/* ── App shell ── */
+.app-shell {
+  max-width: 520px;
+  margin: 0 auto;
+  padding: 1.5rem 1rem 3rem;
+  display: grid;
+  gap: 1.2rem;
+}
+
+.title-panel { text-align: center; }
+.title-panel h1 {
+  margin: 0;
+  font-size: clamp(1.3rem, 2vw + 0.8rem, 2rem);
+  letter-spacing: 0.04em;
+}
+.title-panel p {
+  margin: 0.3rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+/* ═══════════════════════════════════════════════
+   APX WRAPPER — holds antenna + radio side-by-side
+   ═══════════════════════════════════════════════ */
+.apx-wrapper {
+  position: relative;
+  width: 360px;   /* extra left room for PTT bar */
+  margin: 0 auto;
+  /* extra top room for antenna */
+  padding-top: 210px;
+  padding-left: 22px;
+}
+
+/* ── Antenna ── */
+.apx-antenna {
+  position: absolute;
+  top: 0;
+  left: 22px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  z-index: 10;
+}
+
+.apx-antenna-tip {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #555, #111);
+  border: 1px solid #080808;
+}
+
+.apx-antenna-whip {
+  width: 12px;
+  height: 190px;
+  background: linear-gradient(
+    to right,
+    #0a0a0a 0%, #4a4a4a 25%, #606060 50%, #4a4a4a 75%, #0a0a0a 100%
+  );
+  border-radius: 4px 4px 2px 2px;
+  box-shadow: 0 0 4px rgba(0,0,0,0.6);
+  position: relative;
+}
+
+.apx-antenna-whip::after {
+  content: "GPS";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translateX(-50%) translateY(-50%) rotate(-90deg);
+  font-size: 7px;
+  letter-spacing: 0.12em;
+  color: rgba(255,255,255,0.18);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.apx-antenna-coupling {
+  width: 18px;
+  height: 14px;
+  background: linear-gradient(180deg, #3a3a3a 0%, #1a1a1a 100%);
+  border-radius: 3px;
+  border: 1px solid #0a0a0a;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.5);
+}
+
+/* ═══════════════════════════════════════════════
+   APX RADIO — main chassis
+   ═══════════════════════════════════════════════ */
+.apx-radio {
+  position: relative;
+  width: 320px;
+  background: linear-gradient(170deg, #282828 0%, #1c1c1c 50%, #181818 100%);
+  border-radius: 18px 18px 6px 6px;
+  border: 1px solid #0a0a0a;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.07),
+    inset -1px 0 0 rgba(255,255,255,0.03),
+    0 20px 60px rgba(0,0,0,0.8),
+    0 4px 12px rgba(0,0,0,0.6),
+    4px 0 14px rgba(0,0,0,0.4);
+  transition: filter 200ms ease;
+}
+
+/* ── Side PTT bar (left) ── */
+.apx-ptt-bar {
+  position: absolute;
+  left: -20px;
+  top: 60px;
+  width: 22px;
+  height: 180px;
+  background: linear-gradient(180deg, #292929 0%, #1a1a1a 50%, #222 100%);
+  border: 1px solid #080808;
+  border-radius: 8px 4px 4px 8px;
+  box-shadow:
+    inset 1px 0 2px rgba(255,255,255,0.05),
+    -2px 0 6px rgba(0,0,0,0.4);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+  padding: 0;
+  z-index: 5;
+  transition: background 80ms ease, box-shadow 80ms ease;
+}
+
+.apx-ptt-bar:not(:disabled):active,
+.apx-ptt-bar.active {
+  background: linear-gradient(180deg, #2a6040 0%, #1e4a30 50%, #234035 100%);
+  box-shadow:
+    inset 1px 0 3px rgba(100,255,160,0.12),
+    -1px 0 4px rgba(0,0,0,0.3);
+}
+
+.apx-ptt-bar:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.apx-ptt-label {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  transform: rotate(180deg);
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: #aaa;
+  pointer-events: none;
+}
+
+.apx-ptt-indicator {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #3a3a3a;
+  border: 1px solid #0a0a0a;
+  transition: background 80ms ease, box-shadow 80ms ease;
+  pointer-events: none;
+}
+
+.apx-ptt-bar.active .apx-ptt-indicator {
+  background: #6fdf9a;
+  box-shadow: 0 0 6px rgba(111,223,154,0.7);
+}
+
+/* ── Side emergency nub (right) ── */
+.apx-emergency-nub {
+  position: absolute;
+  right: -10px;
+  top: 90px;
+  width: 14px;
+  height: 38px;
+  background: linear-gradient(180deg, #c44820 0%, #902010 100%);
+  border-radius: 4px 6px 6px 4px;
+  border: 1px solid #600e00;
+  box-shadow: 2px 0 5px rgba(0,0,0,0.4);
+}
+
+/* ── Top housing ── */
+.apx-top-housing {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px 8px 36px; /* left-pad to clear antenna */
+  background: linear-gradient(180deg, #242424 0%, #1c1c1c 100%);
+  border-radius: 18px 18px 0 0;
+  border-bottom: 1px solid #0e0e0e;
+}
+
+/* ── Knobs ── */
+.apx-knob {
+  position: relative;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 30% 25%, #484848 0%, #222 60%, #111 100%);
+  border: 1px solid #080808;
+  box-shadow:
+    inset 0 1px 2px rgba(255,255,255,0.12),
+    0 3px 6px rgba(0,0,0,0.6);
+  flex-shrink: 0;
+}
+
+.apx-knob-grip {
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  background: repeating-conic-gradient(#333 0deg 6deg, #222 6deg 12deg);
+  border: 1px solid #1a1a1a;
+}
+
+.apx-knob-mark {
+  position: absolute;
+  top: 3px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 2px;
+  height: 7px;
+  background: #aaa;
+  border-radius: 1px;
+}
+
+/* ── Motorola badge ── */
+.apx-moto-badge {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+}
+
+.apx-moto-svg {
+  width: 30px;
+  height: 30px;
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.5));
+}
+
+/* ── Top ports ── */
+.apx-top-ports {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.apx-port {
+  background: #0e0e0e;
+  border: 1px solid #080808;
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.8);
+}
+
+.apx-port-round {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.apx-port-rect {
+  width: 7px;
+  height: 14px;
+  border-radius: 2px;
+}
+
+/* ═══════════════════════════════════════════════
+   FACE PANEL
+   ═══════════════════════════════════════════════ */
+.apx-face {
+  padding: 8px 12px 10px;
+  display: grid;
+  gap: 6px;
+}
+
+/* ── Speaker grille ── */
+.apx-speaker {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: #191919;
+  border: 1px solid #0c0c0c;
+}
+
+.apx-slot {
+  height: 3px;
+  border-radius: 2px;
+  background: linear-gradient(to right, #0a0a0a 0%, #333 20%, #333 80%, #0a0a0a 100%);
+  box-shadow: 0 1px 0 rgba(255,255,255,0.04);
+}
+
+/* ── Display bezel ── */
+.apx-display-bezel {
+  border-radius: 6px;
+  background: #111;
+  border: 2px solid #0a0a0a;
+  padding: 4px;
+  box-shadow:
+    inset 0 0 12px rgba(0,0,0,0.8),
+    0 2px 6px rgba(0,0,0,0.5);
+}
+
+/* ── Display screen ── */
+.apx-display {
+  border-radius: 3px;
+  background: var(--lcd-bg);
+  padding: 4px 6px 5px;
+  display: grid;
+  gap: 2px;
+  min-height: 130px;
+  position: relative;
+  overflow: hidden;
+}
+
+/* LCD scanline texture */
+.apx-display::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    180deg,
+    transparent 0px, transparent 2px,
+    rgba(0,0,0,0.04) 2px, rgba(0,0,0,0.04) 4px
+  );
+  pointer-events: none;
+}
+
+/* status bar */
+.apx-status-bar {
+  background: var(--lcd-statusbar);
+  border-radius: 2px;
+  padding: 1px 4px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.apx-zone-id {
+  font-family: var(--font-lcd);
+  font-size: 0.6rem;
+  letter-spacing: 0.1em;
+  color: #a8e890;
+}
+
+.apx-status-icons {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.apx-rssi {
+  font-size: 0.6rem;
+  color: #90c878;
+  letter-spacing: -0.02em;
+}
+
+.apx-bat-icon {
+  font-size: 0.5rem;
+  color: #90c878;
+}
+
+.status-led {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #7f0f16 0%, #4a080d 100%);
+  flex-shrink: 0;
+  transition: background 200ms ease, box-shadow 200ms ease;
+}
+
+/* channel name */
+.apx-ch-name {
+  font-family: var(--font-lcd);
+  font-size: 1.05rem;
+  font-weight: bold;
+  color: var(--lcd-text);
+  letter-spacing: 0.04em;
+  line-height: 1.1;
+  padding: 1px 2px;
+}
+
+/* info rows */
+.apx-info-rows {
+  display: grid;
+  gap: 1px;
+}
+
+.apx-ch-state {
+  font-family: var(--font-lcd);
+  font-size: 0.78rem;
+  color: var(--lcd-text);
+  font-weight: 600;
+}
+
+.apx-conn {
+  font-family: var(--font-lcd);
+  font-size: 0.72rem;
+  color: var(--lcd-muted);
+}
+
+.apx-small-line {
+  font-family: var(--font-lcd);
+  font-size: 0.62rem;
+  color: var(--lcd-muted);
+  opacity: 0.85;
+}
+
+/* mic strip */
+.apx-mic-strip {
+  margin-top: 2px;
+  border-radius: 2px;
+  background: rgba(0,0,0,0.15);
+  overflow: hidden;
+  border: 1px solid rgba(0,0,0,0.2);
+}
+
+#micCanvas {
+  display: block;
+  width: 100%;
+  height: 22px;
+}
+
+/* ── Softkey row ── */
+.apx-softkey-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+
+.apx-sk {
+  height: 34px;
+  border-radius: 4px;
+  border: 1px solid var(--btn-border);
+  background: linear-gradient(180deg, #2c2c2c 0%, #1e1e1e 100%);
+  color: #b8b8b8;
+  font-family: var(--font-ui);
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  padding: 2px 3px;
+  cursor: pointer;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.08),
+    0 2px 3px rgba(0,0,0,0.4);
+  transition: background 80ms ease, box-shadow 80ms ease;
+  touch-action: manipulation;
+}
+
+.apx-sk:active {
+  background: linear-gradient(180deg, #1a1a1a 0%, #252525 100%);
+  box-shadow: inset 0 1px 3px rgba(0,0,0,0.5);
+}
+
+/* Power button */
+.apx-pwr {
+  color: #2a1a00;
+  background: linear-gradient(180deg, #e8b820 0%, #c89010 100%) !important;
+  border-color: #8a6000 !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.25),
+    0 2px 4px rgba(0,0,0,0.5) !important;
+}
+
+.apx-pwr:active {
+  background: linear-gradient(180deg, #b8900e 0%, #a07808 100%) !important;
+}
+
+/* Clean check */
+.clean-check {
+  border-color: #2a3a4a !important;
+  background: linear-gradient(180deg, #243040 0%, #18222e 100%) !important;
+  color: #88aacc !important;
+}
+
+.clean-check.active {
+  border-color: #2a6040 !important;
+  background: linear-gradient(180deg, #244a34 0%, #1a3426 100%) !important;
+  color: #88ddb0 !important;
+}
+
+/* ── Navigation cluster ── */
+.apx-nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 4px 0;
+}
+
+.apx-fn-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  border: 1px solid var(--btn-border);
+  background: linear-gradient(180deg, #282828 0%, #1c1c1c 100%);
+  color: #888;
+  font-size: 0.65rem;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 2px 3px rgba(0,0,0,0.4);
+  touch-action: manipulation;
+}
+
+.apx-dpad {
+  display: grid;
+  gap: 2px;
+}
+
+.apx-dpad-row {
+  display: flex;
+  gap: 2px;
+}
+
+.apx-dpad-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  border: 1px solid #0c0c0c;
+  background: radial-gradient(circle at 40% 35%, #383838 0%, #1e1e1e 100%);
+  color: #888;
+  font-size: 0.6rem;
+  cursor: pointer;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.08),
+    0 2px 3px rgba(0,0,0,0.5);
+  touch-action: manipulation;
+}
+
+.apx-dpad-ok {
+  background: radial-gradient(circle at 40% 35%, #323232 0%, #1a1a1a 100%);
+  color: #aaa;
+  font-size: 0.55rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+/* ── Config panel ── */
+.apx-config {
+  display: grid;
+  gap: 5px;
+  background: #1a1a1a;
+  border: 1px solid #0e0e0e;
+  border-radius: 6px;
+  padding: 7px 8px;
+}
+
+.apx-cfg-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.apx-lbl {
+  display: grid;
+  gap: 2px;
+}
+
+.apx-lbl > span {
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #666;
+}
+
+.apx-lbl-full {
+  grid-column: 1 / -1;
+}
+
+select,
+input[type="text"] {
+  width: 100%;
+  border-radius: 4px;
+  border: 1px solid #0c0c0c;
+  background: #141414;
+  color: #c8c8c8;
+  padding: 4px 6px;
+  font-size: 0.8rem;
+  font-family: var(--font-ui);
+  box-shadow: inset 0 1px 3px rgba(0,0,0,0.5);
+}
+
+select:focus,
+input:focus {
+  outline: 2px solid rgba(200,150,20,0.4);
+  outline-offset: 1px;
+}
+
+/* ── Keypad ── */
+.apx-keypad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+}
+
+.apx-key {
+  height: 30px;
+  border-radius: 4px;
+  border: 1px solid #0c0c0c;
+  background: linear-gradient(180deg, #2a2a2a 0%, #1c1c1c 100%);
+  color: #c0c0c0;
+  font-size: 0.75rem;
+  font-family: var(--font-ui);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.07),
+    0 2px 3px rgba(0,0,0,0.4);
+  touch-action: manipulation;
+}
+
+.apx-key sub {
+  font-size: 0.4rem;
+  color: #666;
+  line-height: 1;
+}
+
+.apx-key-star,
+.apx-key-hash {
+  color: #888;
+}
+
+.apx-key:active {
+  background: linear-gradient(180deg, #181818 0%, #222 100%);
+  box-shadow: inset 0 1px 3px rgba(0,0,0,0.6);
+}
+
+/* ── Active units ── */
+.apx-units {
+  background: #141414;
+  border: 1px solid #0c0c0c;
+  border-radius: 5px;
+  padding: 5px 7px;
+}
+
+.apx-units-hdr {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #555;
+  margin-bottom: 4px;
+}
+
+.apx-units-list {
+  margin: 0;
+  padding: 0 0 0 1rem;
+  list-style: disc;
+  display: grid;
+  gap: 3px;
+  font-size: 0.82rem;
+  color: #a0a0a0;
+  font-family: var(--font-lcd);
+}
+
+/* ── Battery pack ── */
+.apx-battery {
+  border-radius: 0 0 6px 6px;
+  background: linear-gradient(180deg, #161616 0%, #111111 100%);
+  border-top: 2px solid #0a0a0a;
+  padding: 8px 10px 12px;
+}
+
+.apx-bat-body {
+  background: linear-gradient(180deg, #181818 0%, #101010 100%);
+  border-radius: 0 0 5px 5px;
+  border: 1px solid #090909;
+  padding: 8px;
+  display: flex;
+  justify-content: center;
+}
+
+.apx-bat-contacts {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+
+.apx-bat-contacts span {
+  display: block;
+  width: 14px;
+  height: 22px;
+  border-radius: 3px;
+  background: linear-gradient(180deg, #d4a830 0%, #a07820 50%, #c09028 100%);
+  border: 1px solid #7a5800;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.25),
+    0 1px 3px rgba(0,0,0,0.5);
+}
+
+/* ═══════════════════════════════════════════════
+   POWER STATES
+   ═══════════════════════════════════════════════ */
+.apx-radio,
+.apx-radio .apx-top-housing,
+.apx-radio .apx-face,
+.apx-radio .apx-display,
+.apx-radio .apx-battery,
+.apx-radio .apx-ptt-bar,
+.apx-radio .apx-emergency-nub,
+.apx-radio .status-led {
+  transition: filter 200ms ease, opacity 200ms ease, box-shadow 200ms ease;
+}
+
+/* ── Power OFF ── */
+.apx-radio.power-off {
+  filter: saturate(0.3) brightness(0.6);
+}
+
+.apx-radio.power-off .status-led {
+  background: radial-gradient(circle, #7f0f16 0%, #4a080d 100%);
+  box-shadow: none;
+}
+
+.apx-radio.power-off .apx-display {
+  filter: brightness(0.45) saturate(0.2);
+}
+
+/* ── Power CONNECTING ── */
+.apx-radio.power-connecting {
+  filter: saturate(0.7) brightness(0.8);
+}
+
+.apx-radio.power-connecting .status-led {
+  background: radial-gradient(circle, #f0c840 0%, #c89020 65%, #7a5800 100%);
+  box-shadow: 0 0 8px rgba(240,200,64,0.5);
+  animation: led-blink 800ms ease-in-out infinite alternate;
+}
+
+@keyframes led-blink {
+  from { opacity: 0.5; box-shadow: 0 0 4px rgba(240,200,64,0.3); }
+  to   { opacity: 1.0; box-shadow: 0 0 10px rgba(240,200,64,0.7); }
+}
+
+/* ── Power ON ── */
+.apx-radio.power-on {
+  filter: saturate(1) brightness(1);
+}
+
+.apx-radio.power-on .status-led {
+  background: radial-gradient(circle, #90ffb8 0%, #38c070 65%, #206040 100%);
+  box-shadow: 0 0 10px rgba(100,240,160,0.65);
+}
+
+.apx-radio.power-on .apx-display {
+  box-shadow: 0 0 6px rgba(160,220,130,0.12);
+}
+
+/* ═══════════════════════════════════════════════
+   RESPONSIVE
+   ═══════════════════════════════════════════════ */
+@media (max-width: 400px) {
+  .apx-wrapper,
+  .apx-radio {
+    width: 100%;
+    max-width: 320px;
+  }
+
+  .apx-face {
+    padding: 6px 8px 8px;
+  }
+}
+
