@@ -78,6 +78,16 @@ function routePeerAudio(peer, isActiveSpeaker) {
     return;
   }
 
+  // Half-duplex behavior: while transmitting, do not monitor inbound audio.
+  if (state.isPttPressed) {
+    peer.audio.muted = true;
+    peer.audio.volume = 0;
+    if (peer.peerGainNode) {
+      peer.peerGainNode.gain.value = 0;
+    }
+    return;
+  }
+
   if (!isActiveSpeaker) {
     peer.audio.muted = true;
     peer.audio.volume = 0;
@@ -1188,6 +1198,18 @@ joinBtn.addEventListener("click", () => {
 lineEl.addEventListener("change", updatePresence);
 trainIdEl.addEventListener("change", updatePresence);
 
+function muteAllPeers(muted) {
+  for (const peer of state.peers.values()) {
+    if (peer.peerGainNode) {
+      peer.peerGainNode.gain.value = muted ? 0 : 1.0;
+    }
+    if (peer.audio) {
+      peer.audio.muted = muted || !state.cleanMonitorEnabled;
+      peer.audio.volume = muted ? 0 : 1.0;
+    }
+  }
+}
+
 function pttDown() {
   if (state.isPttPressed) {
     return;
@@ -1196,6 +1218,7 @@ function pttDown() {
   state.isPttPressed = true;
   initAudioEngine();
   unlockRemoteAudio();
+  muteAllPeers(true);
   playPttClick(true);
   wsSend("ptt-request", { channel: FIXED_CHANNEL });
 }
@@ -1210,6 +1233,7 @@ function pttUp() {
   playRogerBeep();
   playPttClick(false);
   cutNoiseNow();
+  applyCurrentMonitorRouting();
 }
 
 function forcePttRelease() {
