@@ -32,6 +32,40 @@ Open browser tabs (or multiple devices) at:
 
 - http://localhost:8080
 
+## Access Protection (recommended)
+
+To prevent unauthorized developers/apps from using your signaling server:
+
+1. Enable password login sessions.
+2. Restrict WebSocket origins.
+3. Optionally allow only trusted IPs.
+4. Enforce HTTPS.
+
+Set these environment variables:
+
+- `AUTH_PASSWORD=<strong-password>`
+- `SESSION_SECRET=<long-random-secret>`
+- `ALLOWED_ORIGINS=https://radio.yourdomain.com,https://www.radio.yourdomain.com`
+- `REQUIRE_HTTPS=true`
+
+Optional:
+
+- `ALLOWED_IPS=<comma-separated IP list>`
+- `SESSION_TTL_SECONDS=43200`
+- `RATE_LIMIT_AUTH_MAX=10`
+- `RATE_LIMIT_WS_MAX=60`
+
+How it works:
+
+- Browser requests are redirected to `/login` when unauthenticated.
+- `/auth/login` issues an expiring, signed session cookie.
+- HTTP assets/API and WebSocket upgrades require valid auth.
+- Upgrade/auth endpoints are rate-limited.
+
+Legacy compatibility:
+
+- `ACCESS_TOKEN` still works if set, but password session login is preferred.
+
 ## Run (HTTPS local)
 
 Set these environment variables before starting:
@@ -116,7 +150,8 @@ WebSocket message types used by the client:
 ## Notes for production
 
 - Add TURN (coturn) for NAT traversal.
-- Add authentication and authorization for roles/channels.
+- Configure `AUTH_PASSWORD`, `SESSION_SECRET`, `ALLOWED_ORIGINS`, and `REQUIRE_HTTPS=true`.
+- Use network-level firewalling and optionally `ALLOWED_IPS`.
 - Add persistence and operational logging.
 - Consider SFU architecture (mediasoup/Janus) for larger rooms.
 # openbve-voice-server

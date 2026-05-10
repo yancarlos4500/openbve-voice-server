@@ -502,7 +502,7 @@ body {
 /* ── Softkey row ── */
 .apx-softkey-row {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 4px;
 }
 
@@ -527,6 +527,7 @@ body {
     0 2px 3px rgba(0,0,0,0.4);
   transition: background 80ms ease, box-shadow 80ms ease;
   touch-action: manipulation;
+  user-select: text;
 }
 
 .apx-sk:active {
@@ -548,7 +549,7 @@ body {
   background: linear-gradient(180deg, #b8900e 0%, #a07808 100%) !important;
 }
 
-/* Clean check */
+/* Audio filter */
 .clean-check {
   border-color: #2a3a4a !important;
   background: linear-gradient(180deg, #243040 0%, #18222e 100%) !important;

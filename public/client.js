@@ -44,6 +44,75 @@ const stunConfig = {
 
 const FIXED_CHANNEL = "operations";
 const SETTINGS_STORAGE_KEY = "openbve-radio-settings-v1";
+const authToken = new URLSearchParams(window.location.search).get("token") || "";
+let authCheckInFlight = null;
+
+function withAuthQuery(path) {
+  if (!authToken) {
+    return path;
+  }
+
+  const urlObj = new URL(path, window.location.href);
+  if (!urlObj.searchParams.get("token")) {
+    urlObj.searchParams.set("token", authToken);
+  }
+
+  return `${urlObj.pathname}${urlObj.search}${urlObj.hash}`;
+}
+
+async function ensureAuthenticated() {
+  if (authCheckInFlight) {
+    return authCheckInFlight;
+  }
+
+  authCheckInFlight = (async () => {
+    try {
+      const statusResponse = await fetch(withAuthQuery("/auth/status"), {
+        method: "GET",
+        cache: "no-store"
+      });
+
+      if (statusResponse.status === 404) {
+        // Backward compatibility with older server builds.
+        return true;
+      }
+
+      if (!statusResponse.ok) {
+        return false;
+      }
+
+      const statusPayload = await statusResponse.json().catch(() => null);
+      if (!statusPayload || statusPayload.enabled === false || statusPayload.authenticated === true) {
+        return true;
+      }
+
+      const password = window.prompt("Enter radio access password");
+      if (!password) {
+        setStatus("Authentication required");
+        return false;
+      }
+
+      const loginResponse = await fetch("/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password })
+      });
+
+      if (!loginResponse.ok) {
+        setStatus("Authentication failed");
+        return false;
+      }
+
+      return true;
+    } catch (_err) {
+      return false;
+    } finally {
+      authCheckInFlight = null;
+    }
+  })();
+
+  return authCheckInFlight;
+}
 
 const roleEl = document.getElementById("role");
 const lineEl = document.getElementById("line");
@@ -90,7 +159,7 @@ function updateCleanCheckButton() {
     return;
   }
 
-  cleanCheckBtn.textContent = state.cleanMonitorEnabled ? "Clean Check: On" : "Clean Check: Off";
+  cleanCheckBtn.textContent = state.cleanMonitorEnabled ? "Audio Filter: Off" : "Audio Filter: On";
   cleanCheckBtn.classList.toggle("active", state.cleanMonitorEnabled);
 }
 
@@ -195,7 +264,7 @@ async function probeServerStatus() {
   const timeoutId = window.setTimeout(() => controller.abort(), 2500);
 
   try {
-    const response = await fetch("/api/rooms", {
+    const response = await fetch(withAuthQuery("/api/rooms"), {
       method: "GET",
       cache: "no-store",
       signal: controller.signal
@@ -203,6 +272,8 @@ async function probeServerStatus() {
 
     if (response.ok) {
       setServerStatus("Server: online");
+    } else if (response.status === 401) {
+      setServerStatus("Server: auth required");
     } else {
       setServerStatus("Server: offline");
     }
@@ -489,7 +560,7 @@ async function loadRogerBeepSample() {
 
   state.rogerBeepLoading = true;
   try {
-    const response = await fetch("radiobeep.wav", { cache: "no-store" });
+    const response = await fetch(withAuthQuery("radiobeep.wav"), { cache: "no-store" });
     if (!response.ok) {
       throw new Error(`Failed to load roger beep: HTTP ${response.status}`);
     }
@@ -529,7 +600,7 @@ async function loadRadioStaticSample() {
 
   state.radioStaticLoading = true;
   try {
-    const response = await fetch("radiostatic.wav", { cache: "no-store" });
+    const response = await fetch(withAuthQuery("radiostatic.wav"), { cache: "no-store" });
     if (!response.ok) {
       throw new Error(`Failed to load radio static: HTTP ${response.status}`);
     }
@@ -1549,6 +1620,13 @@ async function join() {
     state.ws.close();
   }
 
+  const authed = await ensureAuthenticated();
+  if (!authed) {
+    setPowerState("off");
+    setServerStatus("Server: auth required");
+    return;
+  }
+
   setPowerState("connecting");
 
   initAudioEngine();
@@ -1558,7 +1636,8 @@ async function join() {
   state.localTrack.enabled = false;
 
   const wsProtocol = location.protocol === "https:" ? "wss" : "ws";
-  const wsUrl = `${wsProtocol}://${location.host}`;
+  const wsBaseUrl = `${wsProtocol}://${location.host}`;
+  const wsUrl = authToken ? `${wsBaseUrl}?token=${encodeURIComponent(authToken)}` : wsBaseUrl;
   state.ws = new WebSocket(wsUrl);
 
   state.ws.onopen = () => {
@@ -1896,7 +1975,7 @@ if (cleanCheckBtn) {
     state.cleanMonitorEnabled = !state.cleanMonitorEnabled;
     updateCleanCheckButton();
     applyCurrentMonitorRouting();
-    setStatus(state.cleanMonitorEnabled ? "Clean monitor enabled" : "Radio FX monitor enabled");
+    setStatus(state.cleanMonitorEnabled ? "Audio filter bypassed" : "Audio filter enabled");
   });
 }
 
