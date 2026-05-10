@@ -1654,10 +1654,12 @@ async function join() {
     setStatus("Joining room...");
   };
 
-  state.ws.onclose = () => {
+  state.ws.onclose = (event) => {
     setPowerState("off");
     setServerStatus("Server: checking...");
-    setStatus("Disconnected");
+    const closeCode = event && typeof event.code === "number" ? event.code : 0;
+    const closeReason = event && event.reason ? ` (${event.reason})` : "";
+    setStatus(`Disconnected [${closeCode}]${closeReason}`);
     pttBtn.disabled = true;
     setTx(false);
     updateNoiseLevel(false);
@@ -1691,6 +1693,7 @@ async function join() {
   state.ws.onerror = () => {
     setPowerState("off");
     setServerStatus("Server: checking...");
+    setStatus("WebSocket handshake failed");
     syncBlockingTone();
     probeServerStatus();
   };

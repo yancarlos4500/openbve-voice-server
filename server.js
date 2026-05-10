@@ -187,11 +187,17 @@ function isValidAuthToken(candidate) {
 }
 
 function isSecureFromHeaders(headers) {
-  const proto = String(headers["x-forwarded-proto"] || "").toLowerCase();
-  if (!proto) {
-    return false;
+  const forwardedProto = String(headers["x-forwarded-proto"] || headers["x-forwarded-protocol"] || "")
+    .toLowerCase();
+  if (forwardedProto) {
+    const hasHttps = forwardedProto.split(",").map((v) => v.trim()).includes("https");
+    if (hasHttps) {
+      return true;
+    }
   }
-  return proto.split(",").map((v) => v.trim()).includes("https");
+
+  const forwardedSsl = String(headers["x-forwarded-ssl"] || "").toLowerCase();
+  return forwardedSsl === "on";
 }
 
 function isLocalRequestHost(host) {
@@ -243,7 +249,40 @@ function isAllowedOrigin(origin) {
     return false;
   }
 
-  return ALLOWED_ORIGINS.includes(String(origin));
+  const normalizedOrigin = String(origin).trim().replace(/\/+$/, "").toLowerCase();
+  const parsedOrigin = safeParseUrl(normalizedOrigin);
+  const originHost = parsedOrigin ? parsedOrigin.host : "";
+
+  return ALLOWED_ORIGINS.some((allowed) => {
+    const normalizedAllowed = String(allowed).trim().replace(/\/+$/, "").toLowerCase();
+    if (!normalizedAllowed) {
+      return false;
+    }
+
+    if (normalizedAllowed === "*") {
+      return true;
+    }
+
+    if (normalizedAllowed === normalizedOrigin) {
+      return true;
+    }
+
+    const parsedAllowed = safeParseUrl(normalizedAllowed);
+    if (parsedAllowed && parsedAllowed.origin === normalizedOrigin) {
+      return true;
+    }
+
+    // Allow host-only entries like "example.com" in ALLOWED_ORIGINS.
+    return Boolean(originHost) && normalizedAllowed === originHost;
+  });
+}
+
+function safeParseUrl(value) {
+  try {
+    return new URL(value);
+  } catch (_err) {
+    return null;
+  }
 }
 
 function setAuthCookie(res, token) {
