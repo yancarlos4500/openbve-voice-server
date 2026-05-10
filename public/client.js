@@ -4,6 +4,10 @@ const state = {
   localTrack: null,
   audioCtx: null,
   masterOutput: null,
+  radioStaticBuffer: null,
+  radioStaticLoading: false,
+  radioStaticSource: null,
+  radioStaticGain: null,
   radioNoiseGain: null,
   radioNoiseCrackleGain: null,
   radioNoiseFlutterDepth: null,
@@ -22,9 +26,15 @@ const state = {
   rogerBeepLoading: false,
   txGranted: false,
   isPttPressed: false,
+  powerMode: "off",
   micAnalyserNode: null,
   micVisualizerAnimationId: null,
-  cleanMonitorEnabled: false
+  cleanMonitorEnabled: false,
+  serverProbeTimerId: null,
+  serverProbeInFlight: false,
+  selectedMicDeviceId: "",
+  selectedOutputDeviceId: "",
+  pttKeyCode: "Space"
 };
 
 const stunConfig = {
@@ -32,6 +42,7 @@ const stunConfig = {
 };
 
 const FIXED_CHANNEL = "operations";
+const SETTINGS_STORAGE_KEY = "openbve-radio-settings-v1";
 
 const roleEl = document.getElementById("role");
 const lineEl = document.getElementById("line");
@@ -45,22 +56,30 @@ const userStatusEl = document.getElementById("userStatus");
 const statusEl = document.getElementById("status");
 const channelStateEl = document.getElementById("channelState");
 const peersEl = document.getElementById("peers");
+const opsTabBtnEl = document.getElementById("opsTabBtn");
+const settingsTabBtnEl = document.getElementById("settingsTabBtn");
+const opsPanelEl = document.getElementById("opsPanel");
+const settingsPanelEl = document.getElementById("settingsPanel");
+const micSelectEl = document.getElementById("micSelect");
+const outputSelectEl = document.getElementById("outputSelect");
+const pttKeyCaptureEl = document.getElementById("pttKeyCapture");
 
 function setPowerState(mode) {
   if (!radioFrameEl) {
     return;
   }
 
+  state.powerMode = mode;
   radioFrameEl.classList.remove("power-off", "power-connecting", "power-on");
   radioFrameEl.classList.add(`power-${mode}`);
 
   if (joinBtn) {
     if (mode === "on") {
-      joinBtn.textContent = "Connected";
+      joinBtn.textContent = "Disconnect";
     } else if (mode === "connecting") {
       joinBtn.textContent = "Connecting...";
     } else {
-      joinBtn.textContent = "Power + Join";
+      joinBtn.textContent = "Connect";
     }
   }
 }
@@ -125,8 +144,230 @@ function setServerStatus(message) {
   serverStatusEl.textContent = message;
 }
 
+function saveSettings() {
+  try {
+    localStorage.setItem(
+      SETTINGS_STORAGE_KEY,
+      JSON.stringify({
+        mic: state.selectedMicDeviceId || "",
+        output: state.selectedOutputDeviceId || "",
+        pttKey: state.pttKeyCode || "Space"
+      })
+    );
+  } catch (_err) {
+    // Ignore storage failures in private/restricted contexts.
+  }
+}
+
+function loadSettings() {
+  try {
+    const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
+    if (!raw) {
+      return;
+    }
+
+    const saved = JSON.parse(raw);
+    if (!saved || typeof saved !== "object") {
+      return;
+    }
+
+    state.selectedMicDeviceId = typeof saved.mic === "string" ? saved.mic : "";
+    state.selectedOutputDeviceId = typeof saved.output === "string" ? saved.output : "";
+    state.pttKeyCode = typeof saved.pttKey === "string" ? saved.pttKey : "Space";
+  } catch (_err) {
+    // Ignore malformed setting payloads.
+  }
+}
+
+async function probeServerStatus() {
+  if (state.serverProbeInFlight) {
+    return;
+  }
+
+  if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+    setServerStatus("Server: online (connected)");
+    return;
+  }
+
+  state.serverProbeInFlight = true;
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), 2500);
+
+  try {
+    const response = await fetch("/api/rooms", {
+      method: "GET",
+      cache: "no-store",
+      signal: controller.signal
+    });
+
+    if (response.ok) {
+      setServerStatus("Server: online");
+    } else {
+      setServerStatus("Server: offline");
+    }
+  } catch (_err) {
+    setServerStatus("Server: offline");
+  } finally {
+    window.clearTimeout(timeoutId);
+    state.serverProbeInFlight = false;
+  }
+}
+
+function startServerStatusProbe() {
+  if (state.serverProbeTimerId) {
+    window.clearInterval(state.serverProbeTimerId);
+  }
+
+  probeServerStatus();
+  state.serverProbeTimerId = window.setInterval(() => {
+    probeServerStatus();
+  }, 8000);
+}
+
 function setUserStatus(message) {
   userStatusEl.textContent = message;
+}
+
+function setActiveTab(showSettings) {
+  if (!opsTabBtnEl || !settingsTabBtnEl || !opsPanelEl || !settingsPanelEl) {
+    return;
+  }
+
+  opsTabBtnEl.classList.toggle("active", !showSettings);
+  settingsTabBtnEl.classList.toggle("active", showSettings);
+  opsTabBtnEl.setAttribute("aria-selected", String(!showSettings));
+  settingsTabBtnEl.setAttribute("aria-selected", String(showSettings));
+
+  opsPanelEl.classList.toggle("active", !showSettings);
+  settingsPanelEl.classList.toggle("active", showSettings);
+  opsPanelEl.hidden = showSettings;
+  settingsPanelEl.hidden = !showSettings;
+}
+
+async function applyAudioOutputSink(audioElement) {
+  if (!audioElement) {
+    return;
+  }
+
+  if (typeof audioElement.setSinkId !== "function") {
+    return;
+  }
+
+  try {
+    await audioElement.setSinkId(state.selectedOutputDeviceId || "");
+  } catch (_err) {
+    setStatus("Output device switch blocked by browser/device policy");
+  }
+}
+
+async function applyAudioContextOutputSink() {
+  if (!state.audioCtx || typeof state.audioCtx.setSinkId !== "function") {
+    return false;
+  }
+
+  try {
+    await state.audioCtx.setSinkId(state.selectedOutputDeviceId || "default");
+    return true;
+  } catch (_err) {
+    return false;
+  }
+}
+
+async function applyOutputDeviceToPeers() {
+  const contextSinkApplied = await applyAudioContextOutputSink();
+
+  for (const peer of state.peers.values()) {
+    await applyAudioOutputSink(peer.audio);
+  }
+
+  if (!contextSinkApplied && state.audioCtx) {
+    setStatus("Output switch may be limited by your browser for radio FX audio");
+  }
+}
+
+async function populateDeviceSelectors() {
+  if (!navigator.mediaDevices || typeof navigator.mediaDevices.enumerateDevices !== "function") {
+    return;
+  }
+
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+
+    if (micSelectEl) {
+      const selected = state.selectedMicDeviceId;
+      micSelectEl.innerHTML = '<option value="">Default microphone</option>';
+      let micIndex = 1;
+      for (const device of devices) {
+        if (device.kind !== "audioinput") {
+          continue;
+        }
+        const option = document.createElement("option");
+        option.value = device.deviceId;
+        option.textContent = device.label || `Microphone ${micIndex}`;
+        micSelectEl.appendChild(option);
+        micIndex += 1;
+      }
+      micSelectEl.value = selected;
+    }
+
+    if (outputSelectEl) {
+      const selected = state.selectedOutputDeviceId;
+      outputSelectEl.innerHTML = '<option value="">Default output</option>';
+      let outIndex = 1;
+      for (const device of devices) {
+        if (device.kind !== "audiooutput") {
+          continue;
+        }
+        const option = document.createElement("option");
+        option.value = device.deviceId;
+        option.textContent = device.label || `Headset/Speaker ${outIndex}`;
+        outputSelectEl.appendChild(option);
+        outIndex += 1;
+      }
+      outputSelectEl.value = selected;
+    }
+  } catch (_err) {
+    // Ignore enumeration errors when browser blocks device labels pre-permission.
+  }
+}
+
+async function switchMicrophone(deviceId) {
+  state.selectedMicDeviceId = deviceId || "";
+  saveSettings();
+
+  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+    return;
+  }
+
+  try {
+    const rawStream = await getMicrophoneStream();
+    const newStream = createBoostedMicrophoneStream(rawStream);
+    const newTrack = newStream.getAudioTracks()[0];
+
+    if (!newTrack) {
+      return;
+    }
+
+    for (const peer of state.peers.values()) {
+      const sender = peer.pc.getSenders().find((item) => item.track && item.track.kind === "audio");
+      if (sender) {
+        await sender.replaceTrack(newTrack);
+      }
+    }
+
+    if (state.localStream) {
+      for (const track of state.localStream.getTracks()) {
+        track.stop();
+      }
+    }
+
+    state.localStream = newStream;
+    state.localTrack = newTrack;
+    state.localTrack.enabled = state.txGranted;
+    setStatus("Microphone updated");
+  } catch (_err) {
+    setStatus("Failed to switch microphone");
+  }
 }
 
 function unlockRemoteAudio() {
@@ -228,6 +469,18 @@ function createWalkieDistortionCurve(amount = 100) {
   return curve;
 }
 
+// Hard tanh saturation — sounds like an overdriven RF stage
+function createRadioSaturationCurve(drive = 260) {
+  const size = 512;
+  const curve = new Float32Array(size);
+  const k = drive / 100;
+  for (let i = 0; i < size; i++) {
+    const x = (i * 2) / size - 1;
+    curve[i] = Math.tanh(k * x) / Math.tanh(k); // normalised to ±1
+  }
+  return curve;
+}
+
 async function loadRogerBeepSample() {
   if (!state.audioCtx || state.rogerBeepBuffer || state.rogerBeepLoading) {
     return;
@@ -247,6 +500,51 @@ async function loadRogerBeepSample() {
     // Keep synthetic fallback when external beep file is unavailable.
   } finally {
     state.rogerBeepLoading = false;
+  }
+}
+
+function ensureRadioStaticSource() {
+  if (!state.audioCtx || !state.radioStaticBuffer || !state.radioStaticGain || state.radioStaticSource) {
+    return;
+  }
+
+  const source = state.audioCtx.createBufferSource();
+  source.buffer = state.radioStaticBuffer;
+  source.loop = true;
+  source.connect(state.radioStaticGain);
+  source.start();
+  source.onended = () => {
+    if (state.radioStaticSource === source) {
+      state.radioStaticSource = null;
+    }
+  };
+  state.radioStaticSource = source;
+}
+
+async function loadRadioStaticSample() {
+  if (!state.audioCtx || state.radioStaticBuffer || state.radioStaticLoading) {
+    return;
+  }
+
+  state.radioStaticLoading = true;
+  try {
+    const response = await fetch("radiostatic.wav", { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error(`Failed to load radio static: HTTP ${response.status}`);
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    const decoded = await state.audioCtx.decodeAudioData(arrayBuffer.slice(0));
+    state.radioStaticBuffer = decoded;
+    ensureRadioStaticSource();
+    if (state.lastRxActive) {
+      // If RX is already active, switch to sample static immediately.
+      updateNoiseLevel(true);
+    }
+  } catch (_err) {
+    // Keep synthetic static fallback when external sample is unavailable.
+  } finally {
+    state.radioStaticLoading = false;
   }
 }
 
@@ -304,6 +602,9 @@ function initAudioEngine() {
   const crackleGain = ctx.createGain();
   crackleGain.gain.value = 0;
 
+  const radioStaticGain = ctx.createGain();
+  radioStaticGain.gain.value = 0;
+
   const blockingToneGain = ctx.createGain();
   blockingToneGain.gain.value = 0;
 
@@ -350,6 +651,7 @@ function initAudioEngine() {
 
   noiseGain.connect(masterGain);
   crackleGain.connect(masterGain);
+  radioStaticGain.connect(masterGain);
   blockingToneGain.connect(masterGain);
 
   hissSource.start();
@@ -361,13 +663,21 @@ function initAudioEngine() {
 
   state.audioCtx = ctx;
   state.masterOutput = masterGain;
+  state.radioStaticGain = radioStaticGain;
   state.radioNoiseGain = noiseGain;
   state.radioNoiseCrackleGain = crackleGain;
   state.radioNoiseFlutterDepth = noiseFlutterDepth;
   state.blockingToneGain = blockingToneGain;
 
+  if (state.selectedOutputDeviceId) {
+    applyAudioContextOutputSink();
+  }
+
   loadRogerBeepSample().catch(() => {
     // Ignore lazy load failures and keep fallback tone.
+  });
+  loadRadioStaticSample().catch(() => {
+    // Ignore lazy load failures and keep fallback static.
   });
 }
 
@@ -380,8 +690,27 @@ function updateNoiseLevel(active) {
   state.radioNoiseGain.gain.cancelScheduledValues(now);
   state.radioNoiseCrackleGain.gain.cancelScheduledValues(now);
   state.radioNoiseFlutterDepth.gain.cancelScheduledValues(now);
+  if (state.radioStaticGain) {
+    state.radioStaticGain.gain.cancelScheduledValues(now);
+  }
+
+  const hasExternalStatic = Boolean(state.radioStaticBuffer && state.radioStaticGain);
+  if (hasExternalStatic) {
+    ensureRadioStaticSource();
+  }
 
   if (!active) {
+    if (state.radioStaticGain) {
+      state.radioStaticGain.gain.setValueAtTime(0, now);
+    }
+    state.radioNoiseGain.gain.setValueAtTime(0, now);
+    state.radioNoiseCrackleGain.gain.setValueAtTime(0, now);
+    state.radioNoiseFlutterDepth.gain.setValueAtTime(0, now);
+    return;
+  }
+
+  if (hasExternalStatic && state.radioStaticGain) {
+    state.radioStaticGain.gain.setValueAtTime(0.11, now);
     state.radioNoiseGain.gain.setValueAtTime(0, now);
     state.radioNoiseCrackleGain.gain.setValueAtTime(0, now);
     state.radioNoiseFlutterDepth.gain.setValueAtTime(0, now);
@@ -399,6 +728,10 @@ function cutNoiseNow() {
   }
 
   const now = state.audioCtx.currentTime;
+  if (state.radioStaticGain) {
+    state.radioStaticGain.gain.cancelScheduledValues(now);
+    state.radioStaticGain.gain.setValueAtTime(0, now);
+  }
   state.radioNoiseGain.gain.cancelScheduledValues(now);
   state.radioNoiseGain.gain.setValueAtTime(0, now);
 
@@ -410,6 +743,73 @@ function cutNoiseNow() {
   if (state.radioNoiseFlutterDepth) {
     state.radioNoiseFlutterDepth.gain.cancelScheduledValues(now);
     state.radioNoiseFlutterDepth.gain.setValueAtTime(0, now);
+  }
+}
+
+// Squelch open: short decaying noise burst (the gate-open "pop") when RX begins
+function playSquelchOpen() {
+  if (!state.audioCtx || !state.masterOutput) return;
+  const ctx = state.audioCtx;
+  const out = state.masterOutput;
+  const now = ctx.currentTime;
+
+  const sampleCount = Math.floor(ctx.sampleRate * 0.014);
+  const buf = ctx.createBuffer(1, sampleCount, ctx.sampleRate);
+  const ch = buf.getChannelData(0);
+  for (let i = 0; i < sampleCount; i++) {
+    ch[i] = (Math.random() * 2 - 1) * Math.exp(-i / (sampleCount * 0.28));
+  }
+
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+
+  const bp = ctx.createBiquadFilter();
+  bp.type = "bandpass";
+  bp.frequency.value = 1900;
+  bp.Q.value = 0.55;
+
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.32, now);
+  g.gain.linearRampToValueAtTime(0, now + 0.014);
+
+  src.connect(bp);
+  bp.connect(g);
+  g.connect(out);
+  src.start(now);
+}
+
+// Squelch close: noise burst then sharp cut — classic squelch tail
+function playSquelchClose() {
+  if (!state.audioCtx) return;
+  const ctx = state.audioCtx;
+  const now = ctx.currentTime;
+  const sg = state.radioStaticGain;
+  const ng = state.radioNoiseGain;
+  const cg = state.radioNoiseCrackleGain;
+  const fd = state.radioNoiseFlutterDepth;
+
+  if (sg) sg.gain.cancelScheduledValues(now);
+  ng.gain.cancelScheduledValues(now);
+  if (cg) cg.gain.cancelScheduledValues(now);
+  if (fd) fd.gain.cancelScheduledValues(now);
+
+  // Instant burst
+  if (sg) sg.gain.setValueAtTime(0.19, now);
+  ng.gain.setValueAtTime(0.12, now);
+  if (cg) cg.gain.setValueAtTime(0.09, now);
+  if (fd) fd.gain.setValueAtTime(0, now);
+
+  // Hold ~75 ms then cut sharply over 12 ms
+  const holdEnd = now + 0.075;
+  if (sg) {
+    sg.gain.setValueAtTime(0.19, holdEnd);
+    sg.gain.linearRampToValueAtTime(0, holdEnd + 0.012);
+  }
+  ng.gain.setValueAtTime(0.12, holdEnd);
+  ng.gain.linearRampToValueAtTime(0, holdEnd + 0.012);
+  if (cg) {
+    cg.gain.setValueAtTime(0.09, holdEnd);
+    cg.gain.linearRampToValueAtTime(0, holdEnd + 0.012);
   }
 }
 
@@ -645,46 +1045,86 @@ function connectPeerAudio(peer, stream) {
     peer.peerGainNode = state.audioCtx.createGain();
     peer.peerGainNode.gain.value = 0;
 
+    // ── Pre-amp: boost input into clipping stage ──────────────────────
+    const preGain = state.audioCtx.createGain();
+    preGain.gain.value = 3.5;
+
+    // ── Stage 1: steep highpass × 2 (12 dB + 12 dB = 24 dB/oct) ──────
     const radioHighpass = state.audioCtx.createBiquadFilter();
     radioHighpass.type = "highpass";
-    radioHighpass.frequency.value = 360;
+    radioHighpass.frequency.value = 430;
+    radioHighpass.Q.value = 0.85;
 
+    const radioHighpass2 = state.audioCtx.createBiquadFilter();
+    radioHighpass2.type = "highpass";
+    radioHighpass2.frequency.value = 430;
+    radioHighpass2.Q.value = 0.85;
+
+    // ── Stage 2: tighter lowpass (radio bandwidth ≈ 300-2500 Hz) ──────
     const radioLowpass = state.audioCtx.createBiquadFilter();
     radioLowpass.type = "lowpass";
-    radioLowpass.frequency.value = 2850;
+    radioLowpass.frequency.value = 2450;
+    radioLowpass.Q.value = 1.1;
 
+    // ── Stage 3: cut low-mid mud ───────────────────────────────────────
     const lowMidDip = state.audioCtx.createBiquadFilter();
     lowMidDip.type = "peaking";
-    lowMidDip.frequency.value = 650;
-    lowMidDip.Q.value = 1.1;
-    lowMidDip.gain.value = -3.4;
+    lowMidDip.frequency.value = 580;
+    lowMidDip.Q.value = 1.5;
+    lowMidDip.gain.value = -6;
 
+    // ── Stage 4: presence boost (intelligibility) ──────────────────────
     const presencePeak = state.audioCtx.createBiquadFilter();
     presencePeak.type = "peaking";
-    presencePeak.frequency.value = 1950;
-    presencePeak.Q.value = 1.4;
-    presencePeak.gain.value = 5.8;
+    presencePeak.frequency.value = 1900;
+    presencePeak.Q.value = 1.8;
+    presencePeak.gain.value = 7;
 
+    // ── Stage 5: speaker-box resonance (~1.1 kHz honk) ────────────────
+    const boxResonance = state.audioCtx.createBiquadFilter();
+    boxResonance.type = "peaking";
+    boxResonance.frequency.value = 1100;
+    boxResonance.Q.value = 3.2;
+    boxResonance.gain.value = 4;
+
+    // ── Stage 6: hard RF saturation ───────────────────────────────────
     const radioDrive = state.audioCtx.createWaveShaper();
-    radioDrive.curve = createWalkieDistortionCurve(46);
+    radioDrive.curve = createRadioSaturationCurve(260);
     radioDrive.oversample = "4x";
 
+    // ── Stage 7: post-clip bandpass to clean out-of-band artifacts ────
+    const postHP = state.audioCtx.createBiquadFilter();
+    postHP.type = "highpass";
+    postHP.frequency.value = 380;
+    postHP.Q.value = 0.7;
+
+    const postLP = state.audioCtx.createBiquadFilter();
+    postLP.type = "lowpass";
+    postLP.frequency.value = 2700;
+    postLP.Q.value = 0.7;
+
+    // ── Stage 8: brutal AGC (real radio limiter) ───────────────────────
     const radioCompressor = state.audioCtx.createDynamicsCompressor();
-    radioCompressor.threshold.value = -26;
-    radioCompressor.knee.value = 10;
-    radioCompressor.ratio.value = 6;
-    radioCompressor.attack.value = 0.002;
-    radioCompressor.release.value = 0.12;
+    radioCompressor.threshold.value = -20;
+    radioCompressor.knee.value = 3;
+    radioCompressor.ratio.value = 16;
+    radioCompressor.attack.value = 0.001;
+    radioCompressor.release.value = 0.055;
 
     const radioBoost = state.audioCtx.createGain();
-    radioBoost.gain.value = 1.2;
+    radioBoost.gain.value = 1.6;
 
-    peer.peerGainNode.connect(radioHighpass);
-    radioHighpass.connect(radioLowpass);
+    peer.peerGainNode.connect(preGain);
+    preGain.connect(radioHighpass);
+    radioHighpass.connect(radioHighpass2);
+    radioHighpass2.connect(radioLowpass);
     radioLowpass.connect(lowMidDip);
     lowMidDip.connect(presencePeak);
-    presencePeak.connect(radioDrive);
-    radioDrive.connect(radioCompressor);
+    presencePeak.connect(boxResonance);
+    boxResonance.connect(radioDrive);
+    radioDrive.connect(postHP);
+    postHP.connect(postLP);
+    postLP.connect(radioCompressor);
     radioCompressor.connect(radioBoost);
     radioBoost.connect(state.masterOutput || state.audioCtx.destination);
 
@@ -765,6 +1205,7 @@ function ensurePeer(peerInfo) {
   audio.playsInline = true;
   audio.muted = true;
   audio.volume = 0;
+  applyAudioOutputSink(audio);
 
   pc.ontrack = (event) => {
     audio.srcObject = event.streams[0];
@@ -862,13 +1303,20 @@ function applyTxState(payload) {
     }
   }
 
+  const startedTransmission = !state.lastRxActive && isReceivingAudio;
   const endedTransmission = state.lastRxActive && !isReceivingAudio && !state.txGranted;
-  if (endedTransmission) {
+
+  if (startedTransmission) {
+    playSquelchOpen();
+    updateNoiseLevel(true);
+  } else if (endedTransmission) {
     playEndTransmissionTail();
+    playSquelchClose(); // schedules noise burst+cut; skip updateNoiseLevel(false)
+  } else {
+    updateNoiseLevel(isReceivingAudio);
   }
 
   state.lastRxActive = isReceivingAudio;
-  updateNoiseLevel(isReceivingAudio);
   syncBlockingTone();
 
   if (!payload.active) {
@@ -909,12 +1357,34 @@ async function getMicrophoneStream() {
     audio: {
       echoCancellation: true,
       noiseSuppression: true,
-      autoGainControl: true
+      autoGainControl: true,
+      ...(state.selectedMicDeviceId ? { deviceId: { exact: state.selectedMicDeviceId } } : {})
     }
   };
 
   if (navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === "function") {
-    return navigator.mediaDevices.getUserMedia(constraints);
+    try {
+      return await navigator.mediaDevices.getUserMedia(constraints);
+    } catch (err) {
+      if (!state.selectedMicDeviceId) {
+        throw err;
+      }
+
+      state.selectedMicDeviceId = "";
+      if (micSelectEl) {
+        micSelectEl.value = "";
+      }
+      saveSettings();
+      setStatus("Selected microphone unavailable, using default mic");
+
+      return navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
+      });
+    }
   }
 
   const legacyGetUserMedia =
@@ -1054,7 +1524,7 @@ async function join() {
 
   state.ws.onopen = () => {
     setPowerState("on");
-    setServerStatus("Server: connected");
+    setServerStatus("Server: online (connected)");
     setUserStatus("User: joining...");
 
     wsSend("join", {
@@ -1068,7 +1538,7 @@ async function join() {
 
   state.ws.onclose = () => {
     setPowerState("off");
-    setServerStatus("Server: disconnected");
+    setServerStatus("Server: checking...");
     setStatus("Disconnected");
     pttBtn.disabled = true;
     setTx(false);
@@ -1089,12 +1559,14 @@ async function join() {
     refreshPeerList();
     updateSelfStatus();
     syncBlockingTone();
+    probeServerStatus();
   };
 
   state.ws.onerror = () => {
     setPowerState("off");
-    setServerStatus("Server: connection error");
+    setServerStatus("Server: checking...");
     syncBlockingTone();
+    probeServerStatus();
   };
 
   state.ws.onmessage = async (event) => {
@@ -1247,6 +1719,12 @@ async function join() {
 }
 
 joinBtn.addEventListener("click", () => {
+  if (state.ws && (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING)) {
+    setStatus("Disconnecting...");
+    state.ws.close();
+    return;
+  }
+
   join().catch((err) => {
     setPowerState("off");
     setStatus(`Join failed: ${err.message}`);
@@ -1269,6 +1747,10 @@ function muteAllPeers(muted) {
 }
 
 function pttDown() {
+  if (state.powerMode !== "on") {
+    return;
+  }
+
   if (state.isPttPressed) {
     return;
   }
@@ -1321,7 +1803,10 @@ pttBtn.addEventListener("pointerup", pttUp);
 pttBtn.addEventListener("pointercancel", pttUp);
 
 window.addEventListener("keydown", (event) => {
-  if (event.code === "Space") {
+  if (event.code === state.pttKeyCode) {
+    if (event.repeat) {
+      return;
+    }
     event.preventDefault();
     initAudioEngine();
     pttDown();
@@ -1329,7 +1814,7 @@ window.addEventListener("keydown", (event) => {
 });
 
 window.addEventListener("keyup", (event) => {
-  if (event.code === "Space") {
+  if (event.code === state.pttKeyCode) {
     event.preventDefault();
     pttUp();
   }
@@ -1350,6 +1835,8 @@ window.addEventListener("blur", () => {
   forcePttRelease();
 });
 
+loadSettings();
+
 if (cleanCheckBtn) {
   cleanCheckBtn.addEventListener("click", () => {
     state.cleanMonitorEnabled = !state.cleanMonitorEnabled;
@@ -1359,8 +1846,112 @@ if (cleanCheckBtn) {
   });
 }
 
+if (opsTabBtnEl && settingsTabBtnEl) {
+  opsTabBtnEl.addEventListener("click", () => setActiveTab(false));
+  settingsTabBtnEl.addEventListener("click", async () => {
+    setActiveTab(true);
+    await populateDeviceSelectors();
+  });
+}
+
+function friendlyKeyName(code) {
+  const map = {
+    Space: "Space", Enter: "Enter", Escape: "Escape", Tab: "Tab",
+    Backspace: "Backspace", Delete: "Delete",
+    ShiftLeft: "Left Shift", ShiftRight: "Right Shift",
+    ControlLeft: "Left Ctrl", ControlRight: "Right Ctrl",
+    AltLeft: "Left Alt", AltRight: "Right Alt",
+    MetaLeft: "Left Win", MetaRight: "Right Win",
+    ArrowUp: "↑", ArrowDown: "↓", ArrowLeft: "←", ArrowRight: "→",
+  };
+  if (map[code]) return map[code];
+  // KeyA → A, Digit1 → 1, Numpad0 → Num0, F1 → F1
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3);
+  if (/^Digit\d$/.test(code)) return code.slice(5);
+  if (/^Numpad(.+)$/.test(code)) return "Num" + code.slice(6);
+  return code;
+}
+
+if (pttKeyCaptureEl) {
+  pttKeyCaptureEl.textContent = friendlyKeyName(state.pttKeyCode);
+
+  pttKeyCaptureEl.addEventListener("click", () => {
+    if (pttKeyCaptureEl.classList.contains("capturing")) return;
+    pttKeyCaptureEl.classList.add("capturing");
+    pttKeyCaptureEl.textContent = "Press a key…";
+
+    function onCapture(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      // Ignore bare modifier-only presses so user can combine
+      if (["Shift", "Control", "Alt", "Meta"].includes(e.key)) return;
+      state.pttKeyCode = e.code;
+      saveSettings();
+      pttKeyCaptureEl.classList.remove("capturing");
+      pttKeyCaptureEl.textContent = friendlyKeyName(e.code);
+      setStatus(`PTT key set to ${friendlyKeyName(e.code)}`);
+      window.removeEventListener("keydown", onCapture, true);
+    }
+    window.addEventListener("keydown", onCapture, true);
+  });
+}
+
+if (micSelectEl) {
+  micSelectEl.addEventListener("change", async () => {
+    await switchMicrophone(micSelectEl.value || "");
+  });
+}
+
+if (outputSelectEl) {
+  outputSelectEl.addEventListener("change", async () => {
+    state.selectedOutputDeviceId = outputSelectEl.value || "";
+    saveSettings();
+    await applyOutputDeviceToPeers();
+    setStatus("Audio output updated");
+  });
+}
+
+if (navigator.mediaDevices && typeof navigator.mediaDevices.addEventListener === "function") {
+  navigator.mediaDevices.addEventListener("devicechange", () => {
+    populateDeviceSelectors();
+  });
+}
+
+setActiveTab(false);
+populateDeviceSelectors();
+
 updateCleanCheckButton();
 setPowerState("off");
 
-setServerStatus("Server: disconnected");
+setServerStatus("Server: checking...");
 setUserStatus("User: offline");
+startServerStatusProbe();
+
+// ── Viewport fit: scale the radio to fill the screen without scroll ──
+(function initViewportFit() {
+  const wrapper = document.querySelector(".apx-wrapper");
+  const titlePanel = document.querySelector(".title-panel");
+  if (!wrapper) return;
+
+  function fit() {
+    // Reset to natural size so we can measure
+    wrapper.style.zoom = "1";
+    const naturalW = wrapper.offsetWidth;
+    const naturalH = wrapper.offsetHeight;
+
+    const titleH = titlePanel ? titlePanel.offsetHeight : 0;
+    const shellPad = 10; // top padding + gap
+    const availW = window.innerWidth * 0.97;
+    const availH = window.innerHeight - titleH - shellPad;
+
+    const scale = Math.min(availW / naturalW, availH / naturalH, 1);
+    wrapper.style.zoom = String(Math.max(0.25, scale).toFixed(4));
+  }
+
+  window.addEventListener("resize", fit);
+  if (document.readyState === "complete") {
+    fit();
+  } else {
+    window.addEventListener("load", fit);
+  }
+})();

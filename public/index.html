@@ -3,14 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>MTA Subway Radio Simulator</title>
+    <title>Openbve Radio</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
     <main class="app-shell">
       <section class="title-panel">
-        <h1>MTA Subway Radio Simulator</h1>
-        <p>Portable radio console for one shared operations channel.</p>
+        <h1>Openbve Radio</h1>
+        <p>Portable radio for OpenBVE multiplayer</p>
       </section>
 
       <div class="apx-wrapper">
@@ -85,7 +85,7 @@
                 <div class="apx-info-rows">
                   <div id="channelState" class="apx-ch-state">Channel idle</div>
                   <div id="status" class="apx-conn">Not connected</div>
-                  <div id="serverStatus" class="apx-small-line">Server: disconnected</div>
+                  <div id="serverStatus" class="apx-small-line">Server: offline</div>
                   <div id="userStatus" class="apx-small-line">User: offline</div>
                 </div>
                 <div class="apx-mic-strip">
@@ -108,40 +108,68 @@
               <div class="apx-dpad">
                 <button class="apx-dpad-btn apx-dpad-up">▲</button>
                 <div class="apx-dpad-row">
-                  <button class="apx-dpad-btn apx-dpad-lt">◀</button>
                   <button class="apx-dpad-btn apx-dpad-ok">OK</button>
-                  <button class="apx-dpad-btn apx-dpad-rt">▶</button>
                 </div>
                 <button class="apx-dpad-btn apx-dpad-dn">▼</button>
               </div>
               <button class="apx-fn-btn">▶</button>
             </div>
 
-            <!-- Configuration panel -->
-            <div class="apx-config">
-              <div class="apx-cfg-row">
-                <label class="apx-lbl">
-                  <span>Role</span>
-                  <select id="role">
-                    <option value="operator">Operator</option>
-                    <option value="tower">Tower</option>
-                  </select>
-                </label>
-                <label class="apx-lbl">
-                  <span>Line</span>
-                  <select id="line">
-                    <option value="A">A</option>
-                    <option value="B">B</option>
-                    <option value="C">C</option>
-                    <option value="D">D</option>
-                    <option value="E">E</option>
-                  </select>
-                </label>
+            <!-- Configuration + settings tabs -->
+            <div class="apx-panel-tabs">
+              <div class="apx-tab-row" role="tablist" aria-label="Radio panels">
+                <button id="opsTabBtn" class="apx-tab-btn active" type="button" role="tab" aria-selected="true" aria-controls="opsPanel">Ops</button>
+                <button id="settingsTabBtn" class="apx-tab-btn" type="button" role="tab" aria-selected="false" aria-controls="settingsPanel">Settings</button>
               </div>
-              <label class="apx-lbl apx-lbl-full">
-                <span>Train ID</span>
-                <input id="trainId" type="text" value="R160-01" />
-              </label>
+
+              <section id="opsPanel" class="apx-tab-panel active" role="tabpanel" aria-labelledby="opsTabBtn">
+                <div class="apx-config">
+                  <div class="apx-cfg-row">
+                    <label class="apx-lbl">
+                      <span>Role</span>
+                      <select id="role">
+                        <option value="operator">Operator</option>
+                        <option value="tower">Tower</option>
+                      </select>
+                    </label>
+                    <label class="apx-lbl">
+                      <span>Line</span>
+                      <select id="line">
+                        <option value="A">A</option>
+                        <option value="B">B</option>
+                        <option value="C">C</option>
+                        <option value="D">D</option>
+                        <option value="E">E</option>
+                      </select>
+                    </label>
+                  </div>
+                  <label class="apx-lbl apx-lbl-full">
+                    <span>Train ID</span>
+                    <input id="trainId" type="text" value="R160-01" />
+                  </label>
+                </div>
+              </section>
+
+              <section id="settingsPanel" class="apx-tab-panel" role="tabpanel" aria-labelledby="settingsTabBtn" hidden>
+                <div class="apx-config apx-settings-grid">
+                  <label class="apx-lbl apx-lbl-full">
+                    <span>Microphone</span>
+                    <select id="micSelect">
+                      <option value="">Default microphone</option>
+                    </select>
+                  </label>
+                  <label class="apx-lbl apx-lbl-full">
+                    <span>Headset / Output</span>
+                    <select id="outputSelect">
+                      <option value="">Default output</option>
+                    </select>
+                  </label>
+                  <label class="apx-lbl apx-lbl-full">
+                    <span>Push-To-Talk Key</span>
+                    <button id="pttKeyCapture" type="button" class="apx-ptt-capture">Space</button>
+                  </label>
+                </div>
+              </section>
             </div>
 
             <!-- Numeric keypad (decorative) -->

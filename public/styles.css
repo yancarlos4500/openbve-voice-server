@@ -48,9 +48,15 @@
 /* ── Reset ── */
 *, *::before, *::after { box-sizing: border-box; }
 
+html {
+  height: 100%;
+  overflow: hidden;
+}
+
 body {
   margin: 0;
-  min-height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
   font-family: var(--font-ui);
   color: var(--text-main);
   background:
@@ -63,21 +69,28 @@ body {
 .app-shell {
   max-width: 520px;
   margin: 0 auto;
-  padding: 1.5rem 1rem 3rem;
-  display: grid;
-  gap: 1.2rem;
+  padding: 0.3rem 0 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  height: 100dvh;
+  overflow: hidden;
 }
 
-.title-panel { text-align: center; }
+.title-panel {
+  text-align: center;
+  flex-shrink: 0;
+}
 .title-panel h1 {
   margin: 0;
-  font-size: clamp(1.3rem, 2vw + 0.8rem, 2rem);
+  font-size: clamp(1rem, 2vw + 0.5rem, 1.6rem);
   letter-spacing: 0.04em;
 }
 .title-panel p {
-  margin: 0.3rem 0 0;
+  margin: 0.1rem 0 0;
   color: var(--text-muted);
-  font-size: 0.9rem;
+  font-size: clamp(0.72rem, 1.5vw, 0.9rem);
 }
 
 /* ═══════════════════════════════════════════════
@@ -90,6 +103,8 @@ body {
   /* extra top room for antenna */
   padding-top: 210px;
   padding-left: 22px;
+  flex-shrink: 0;
+  transform-origin: top center;
 }
 
 /* ── Antenna ── */
@@ -599,6 +614,46 @@ body {
 }
 
 /* ── Config panel ── */
+.apx-panel-tabs {
+  display: grid;
+  gap: 5px;
+}
+
+.apx-tab-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+
+.apx-tab-btn {
+  height: 26px;
+  border-radius: 4px;
+  border: 1px solid #0d0d0d;
+  background: linear-gradient(180deg, #262626 0%, #1a1a1a 100%);
+  color: #7f7f7f;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 2px 3px rgba(0,0,0,0.35);
+}
+
+.apx-tab-btn.active {
+  color: #1f1806;
+  background: linear-gradient(180deg, #dfb32f 0%, #a87b10 100%);
+  border-color: #735100;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.18), 0 2px 4px rgba(0,0,0,0.45);
+}
+
+.apx-tab-panel {
+  display: none;
+}
+
+.apx-tab-panel.active {
+  display: block;
+}
+
 .apx-config {
   display: grid;
   gap: 5px;
@@ -630,6 +685,10 @@ body {
   grid-column: 1 / -1;
 }
 
+.apx-settings-grid {
+  gap: 7px;
+}
+
 select,
 input[type="text"] {
   width: 100%;
@@ -641,6 +700,38 @@ input[type="text"] {
   font-size: 0.8rem;
   font-family: var(--font-ui);
   box-shadow: inset 0 1px 3px rgba(0,0,0,0.5);
+}
+
+.apx-ptt-capture {
+  width: 100%;
+  border-radius: 4px;
+  border: 1px solid #0c0c0c;
+  background: #141414;
+  color: #c8c8c8;
+  padding: 4px 6px;
+  font-size: 0.8rem;
+  font-family: var(--font-ui);
+  box-shadow: inset 0 1px 3px rgba(0,0,0,0.5);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s, color 0.15s, outline 0.1s;
+}
+
+.apx-ptt-capture:hover {
+  background: #1c1c1c;
+}
+
+.apx-ptt-capture.capturing {
+  background: #1a1400;
+  color: #f0c030;
+  outline: 2px solid rgba(200,150,20,0.6);
+  outline-offset: 1px;
+  animation: ptt-capture-blink 0.6s step-start infinite;
+}
+
+@keyframes ptt-capture-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
 }
 
 select:focus,
