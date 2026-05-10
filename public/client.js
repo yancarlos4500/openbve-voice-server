@@ -28,6 +28,7 @@ const state = {
   isPttPressed: false,
   powerMode: "off",
   micAnalyserNode: null,
+  micAnalyserSourceNode: null,
   micVisualizerAnimationId: null,
   cleanMonitorEnabled: false,
   serverProbeTimerId: null,
@@ -1114,6 +1115,10 @@ function connectPeerAudio(peer, stream) {
     const radioBoost = state.audioCtx.createGain();
     radioBoost.gain.value = 1.6;
 
+    const rxAnalyser = state.audioCtx.createAnalyser();
+    rxAnalyser.fftSize = 256;
+    rxAnalyser.smoothingTimeConstant = 0.7;
+
     peer.peerGainNode.connect(preGain);
     preGain.connect(radioHighpass);
     radioHighpass.connect(radioHighpass2);
@@ -1126,7 +1131,8 @@ function connectPeerAudio(peer, stream) {
     postHP.connect(postLP);
     postLP.connect(radioCompressor);
     radioCompressor.connect(radioBoost);
-    radioBoost.connect(state.masterOutput || state.audioCtx.destination);
+    radioBoost.connect(rxAnalyser);
+    rxAnalyser.connect(state.masterOutput || state.audioCtx.destination);
 
     peer.radioHighpass = radioHighpass;
     peer.radioLowpass = radioLowpass;
@@ -1135,6 +1141,7 @@ function connectPeerAudio(peer, stream) {
     peer.radioDrive = radioDrive;
     peer.radioCompressor = radioCompressor;
     peer.radioBoost = radioBoost;
+    peer.rxAnalyserNode = rxAnalyser;
   }
 
   peer.sourceNode = state.audioCtx.createMediaStreamSource(stream);
@@ -1243,7 +1250,8 @@ function ensurePeer(peerInfo) {
     presencePeak: null,
     radioDrive: null,
     radioCompressor: null,
-    radioBoost: null
+    radioBoost: null,
+    rxAnalyserNode: null
   };
 
   state.peers.set(peerInfo.id, peer);
@@ -1407,11 +1415,23 @@ async function getMicrophoneStream() {
 }
 
 function createBoostedMicrophoneStream(rawStream) {
-  // Store reference for visualization only - don't break the audio chain
-  if (state.audioCtx && rawStream.getTracks().length > 0) {
+  // Mirror mic stream into an analyser so LCD can show local TX level.
+  if (state.audioCtx && rawStream.getAudioTracks().length > 0) {
+    if (state.micAnalyserSourceNode) {
+      try {
+        state.micAnalyserSourceNode.disconnect();
+      } catch (_err) {
+        // Ignore stale analyser source teardown errors.
+      }
+      state.micAnalyserSourceNode = null;
+    }
+
     state.micAnalyserNode = state.audioCtx.createAnalyser();
     state.micAnalyserNode.fftSize = 256;
-    // Note: We can't easily analyze local stream, so visualization will be minimal
+    state.micAnalyserNode.smoothingTimeConstant = 0.75;
+
+    state.micAnalyserSourceNode = state.audioCtx.createMediaStreamSource(rawStream);
+    state.micAnalyserSourceNode.connect(state.micAnalyserNode);
   }
 
   // Return the raw stream unmodified to preserve audio quality
@@ -1435,10 +1455,32 @@ function startMicVisualization() {
 }
 
 function drawMicVisualizer(canvas) {
-  if (!state.micAnalyserNode || !canvas) return;
+  if (!canvas) return;
+
+  let analyser = null;
+  const isReceiverRx = Boolean(
+    state.lastRxActive &&
+    state.activeSpeakerId &&
+    state.selfId &&
+    state.activeSpeakerId !== state.selfId &&
+    !state.isPttPressed &&
+    !state.txGranted
+  );
+
+  if (isReceiverRx) {
+    const activePeer = state.peers.get(state.activeSpeakerId);
+    if (activePeer && activePeer.rxAnalyserNode) {
+      analyser = activePeer.rxAnalyserNode;
+    }
+  }
+
+  if (!analyser && !isReceiverRx) {
+    analyser = state.micAnalyserNode;
+  }
+
+  if (!analyser) return;
 
   const ctx = canvas.getContext("2d");
-  const analyser = state.micAnalyserNode;
   const bufferLength = analyser.frequencyBinCount;
   const dataArray = new Uint8Array(bufferLength);
 
@@ -1456,7 +1498,7 @@ function drawMicVisualizer(canvas) {
   const level = Math.min(1.0, average / 255);
 
   // Clear canvas
-  ctx.fillStyle = "#0a0e13";
+  ctx.fillStyle = "#91a37e";
   ctx.fillRect(0, 0, width, height);
 
   // Draw bars with color grading
@@ -1466,18 +1508,15 @@ function drawMicVisualizer(canvas) {
   for (let i = 0; i < bufferLength; i++) {
     const barHeight = (dataArray[i] / 255) * height;
 
-    // Color gradient: green (good) -> yellow (medium) -> red (loud)
+    // LCD-styled color range: muted green -> olive -> deep amber
     let color;
     const normalizedHeight = barHeight / height;
-    if (normalizedHeight < 0.4) {
-      // Green area (quiet)
-      color = "#3f9b66";
-    } else if (normalizedHeight < 0.7) {
-      // Yellow area (medium)
-      color = "#f8cf3a";
+    if (normalizedHeight < 0.42) {
+      color = "#2b4d24";
+    } else if (normalizedHeight < 0.76) {
+      color = "#4c6a34";
     } else {
-      // Red area (loud)
-      color = "#be3843";
+      color = "#6c6418";
     }
 
     ctx.fillStyle = color;
@@ -1490,15 +1529,15 @@ function drawMicVisualizer(canvas) {
   const levelWidth = (width * level);
   const levelGradient = ctx.createLinearGradient(0, height - 4, levelWidth, height - 4);
   
-  if (level < 0.4) {
-    levelGradient.addColorStop(0, "#3f9b66");
-    levelGradient.addColorStop(1, "#3f9b66");
-  } else if (level < 0.7) {
-    levelGradient.addColorStop(0, "#3f9b66");
-    levelGradient.addColorStop(1, "#f8cf3a");
+  if (level < 0.42) {
+    levelGradient.addColorStop(0, "#2b4d24");
+    levelGradient.addColorStop(1, "#355a2b");
+  } else if (level < 0.76) {
+    levelGradient.addColorStop(0, "#355a2b");
+    levelGradient.addColorStop(1, "#4f6f36");
   } else {
-    levelGradient.addColorStop(0, "#f8cf3a");
-    levelGradient.addColorStop(1, "#be3843");
+    levelGradient.addColorStop(0, "#4f6f36");
+    levelGradient.addColorStop(1, "#6c6418");
   }
 
   ctx.fillStyle = levelGradient;
@@ -1547,6 +1586,14 @@ async function join() {
     if (state.micVisualizerAnimationId) {
       cancelAnimationFrame(state.micVisualizerAnimationId);
       state.micVisualizerAnimationId = null;
+    }
+    if (state.micAnalyserSourceNode) {
+      try {
+        state.micAnalyserSourceNode.disconnect();
+      } catch (_err) {
+        // Ignore analyser cleanup errors.
+      }
+      state.micAnalyserSourceNode = null;
     }
 
     state.selfId = null;
@@ -1663,6 +1710,13 @@ async function join() {
         if (peer.radioBoost) {
           try {
             peer.radioBoost.disconnect();
+          } catch (_err) {
+            // Ignore cleanup errors.
+          }
+        }
+        if (peer.rxAnalyserNode) {
+          try {
+            peer.rxAnalyserNode.disconnect();
           } catch (_err) {
             // Ignore cleanup errors.
           }
