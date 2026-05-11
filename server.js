@@ -180,6 +180,43 @@ const stmts = {
   hasStaffRole:     db.prepare("SELECT 1 AS ok FROM user_roles WHERE user_id = ? AND role IN ('admin','mod') LIMIT 1"),
 };
 
+// ── Seed default admin account ────────────────────────────────
+{
+  const DEFAULT_ADMIN_USERNAME = String(process.env.DEFAULT_ADMIN_USERNAME || "admin").trim();
+  const DEFAULT_ADMIN_EMAIL    = String(process.env.DEFAULT_ADMIN_EMAIL    || "admin@local.invalid").trim().toLowerCase();
+  const DEFAULT_ADMIN_PASSWORD = String(process.env.DEFAULT_ADMIN_PASSWORD || "").trim();
+
+  if (!DEFAULT_ADMIN_PASSWORD) {
+    console.warn("[seed] DEFAULT_ADMIN_PASSWORD is not set; skipping default admin seed.");
+  } else {
+
+  const seedAdmin = db.transaction(() => {
+    let adminUser = stmts.getUserByName.get(DEFAULT_ADMIN_USERNAME);
+    if (!adminUser) {
+      const adminId   = randomUUID();
+      const adminHash = hashPassword(DEFAULT_ADMIN_PASSWORD);
+      stmts.createUser.run(adminId, DEFAULT_ADMIN_USERNAME, DEFAULT_ADMIN_EMAIL, adminHash);
+      adminUser = stmts.getUserById.get(adminId);
+      console.log(`[seed] Default admin account created (username: ${DEFAULT_ADMIN_USERNAME})`);
+    }
+
+    // Ensure the default room exists in the DB so the FK is satisfied.
+    const existingRoom = stmts.getRoomById.get(DEFAULT_ROOM_ID);
+    if (!existingRoom) {
+      stmts.createRoom.run(DEFAULT_ROOM_ID, "Main", adminUser.id, adminUser.username);
+    }
+
+    // Grant admin role if not already set.
+    const existingRole = stmts.getUserRole.get(adminUser.id, DEFAULT_ROOM_ID);
+    if (!existingRole || existingRole.role !== "admin") {
+      stmts.setUserRole.run(adminUser.id, DEFAULT_ROOM_ID, "admin");
+    }
+  });
+
+  seedAdmin();
+  } // end DEFAULT_ADMIN_PASSWORD guard
+}
+
 function isGlobalAdminUser(userId) {
   if (!userId) return false;
   if (stmts.hasAdminRole.get(userId)) return true;
