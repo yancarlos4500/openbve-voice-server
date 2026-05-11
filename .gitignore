@@ -2,3 +2,10 @@ node_modules/
 .env
 npm-debug.log*
 certs/
+
+# Local SQLite database files
+data.db
+data.db-shm
+data.db-wal
+*.sqlite
+*.sqlite3

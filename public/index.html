@@ -7,10 +7,24 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
+    <!-- Room Selection Modal -->
+    <div id="roomSelectionModal" class="modal-overlay">
+      <div class="modal-content">
+        <h2>Select a Server</h2>
+
+        <!-- Join Room Tab -->
+        <div id="join-room" class="modal-tab-content active">
+          <div id="roomList" class="room-list">
+            <div class="loading">Loading servers...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <main class="app-shell">
       <section class="title-panel">
         <h1>Openbve Radio</h1>
-        <p>Portable radio for OpenBVE multiplayer</p>
+        <p>Portable radio for OpenBVE multiplayer &nbsp;·&nbsp; <span id="loggedInUser" style="color:#d4a018"></span> &nbsp;<button id="adminPageBtn" type="button" hidden style="background:none;border:none;color:#88aacc;cursor:pointer;font-size:0.8rem;padding:0;text-decoration:underline;">Admin Page</button> &nbsp;<button id="logoutBtn" type="button" style="background:none;border:none;color:#888;cursor:pointer;font-size:0.8rem;padding:0;text-decoration:underline;">Logout</button></p>
       </section>
 
       <div class="apx-wrapper">
@@ -46,10 +60,6 @@
                 <path d="M17,74 L17,32 L50,56 L83,32 L83,74 L73,74 L73,46 L50,64 L27,46 L27,74 Z" fill="#1a1a1a"/>
               </svg>
             </div>
-            <div class="apx-knob apx-ch">
-              <div class="apx-knob-grip"></div>
-              <span class="apx-knob-mark"></span>
-            </div>
             <div class="apx-top-ports">
               <div class="apx-port apx-port-round"></div>
               <div class="apx-port apx-port-rect"></div>
@@ -74,14 +84,51 @@
             <div class="apx-display-bezel">
               <div class="apx-display">
                 <div class="apx-status-bar">
-                  <span class="apx-zone-id">MTA OPS</span>
-                  <div class="apx-status-icons">
-                    <span class="apx-rssi" aria-hidden="true">▂▄▆</span>
-                    <span class="apx-bat-icon" aria-hidden="true">▪▪▪</span>
-                    <span class="status-led"></span>
+                  <span id="serverName" class="apx-server-name">---</span>
+                  <div class="apx-status-right">
+                    <span id="volumeValue" class="apx-vol-value">100%</span>
+                    <span class="apx-signal-bar">
+                      <span class="apx-signal-dot" style="--index: 1;"></span>
+                      <span class="apx-signal-dot" style="--index: 2;"></span>
+                      <span class="apx-signal-dot" style="--index: 3;"></span>
+                      <span class="apx-signal-dot" style="--index: 4;"></span>
+                    </span>
+                    <span id="txLight" class="tx-light idle"></span>
                   </div>
                 </div>
                 <div class="apx-ch-name">Operations</div>
+                <div class="apx-menu">
+                  <div class="apx-menu-item">
+                    <span class="apx-menu-label">Ch:</span>
+                    <span id="menuChannel" class="apx-menu-value">Operators</span>
+                    <span id="menuChannelArrows" class="apx-menu-arrows">◀ ▶</span>
+                  </div>
+                  <div class="apx-menu-item">
+                    <span class="apx-menu-label">Role:</span>
+                    <span id="menuRole" class="apx-menu-value">Operator</span>
+                    <span id="menuRoleArrows" class="apx-menu-arrows">◀ ▶</span>
+                  </div>
+                  <div class="apx-menu-item">
+                    <span class="apx-menu-label">TID:</span>
+                    <span id="menuTrainId" class="apx-menu-value">----</span>
+                    <span class="apx-menu-arrows">#</span>
+                  </div>
+                  <div class="apx-menu-item">
+                    <span class="apx-menu-label">Mic:</span>
+                    <span id="menuMic" class="apx-menu-value">Default</span>
+                    <span id="menuMicArrows" class="apx-menu-arrows">◀ ▶</span>
+                  </div>
+                  <div class="apx-menu-item">
+                    <span class="apx-menu-label">Out:</span>
+                    <span id="menuOutput" class="apx-menu-value">Default</span>
+                    <span id="menuOutputArrows" class="apx-menu-arrows">◀ ▶</span>
+                  </div>
+                  <div class="apx-menu-item">
+                    <span class="apx-menu-label">PTT:</span>
+                    <span id="menuPtt" class="apx-menu-value">Space</span>
+                    <span class="apx-menu-arrows">OK</span>
+                  </div>
+                </div>
                 <div class="apx-info-rows">
                   <div id="channelState" class="apx-ch-state">Channel idle</div>
                   <div id="status" class="apx-conn">Not connected</div>
@@ -102,7 +149,7 @@
 
             <!-- Navigation cluster -->
             <div class="apx-nav" aria-hidden="true">
-              <button class="apx-fn-btn">◀</button>
+              <button id="navLeftBtn" class="apx-fn-btn">◀</button>
               <div class="apx-dpad">
                 <button class="apx-dpad-btn apx-dpad-up">▲</button>
                 <div class="apx-dpad-row">
@@ -110,64 +157,21 @@
                 </div>
                 <button class="apx-dpad-btn apx-dpad-dn">▼</button>
               </div>
-              <button class="apx-fn-btn">▶</button>
+              <button id="navRightBtn" class="apx-fn-btn">▶</button>
             </div>
 
             <!-- Configuration + settings tabs -->
             <div class="apx-panel-tabs">
-              <div class="apx-tab-row" role="tablist" aria-label="Radio panels">
-                <button id="opsTabBtn" class="apx-tab-btn active" type="button" role="tab" aria-selected="true" aria-controls="opsPanel">Ops</button>
-                <button id="settingsTabBtn" class="apx-tab-btn" type="button" role="tab" aria-selected="false" aria-controls="settingsPanel">Settings</button>
+              <!-- Hidden settings controls kept for functionality -->
+              <div hidden aria-hidden="true" style="display:none !important;">
+                <select id="role">
+                  <option value="operator">Operator</option>
+                </select>
+                <input id="trainId" type="text" value="" inputmode="numeric" pattern="[0-9]*" placeholder="Auto-assigned" />
+                <select id="micSelect"><option value="">Default microphone</option></select>
+                <select id="outputSelect"><option value="">Default output</option></select>
+                <button id="pttKeyCapture" type="button">Space</button>
               </div>
-
-              <section id="opsPanel" class="apx-tab-panel active" role="tabpanel" aria-labelledby="opsTabBtn">
-                <div class="apx-config">
-                  <div class="apx-cfg-row">
-                    <label class="apx-lbl">
-                      <span>Role</span>
-                      <select id="role">
-                        <option value="operator">Operator</option>
-                        <option value="tower">Tower</option>
-                      </select>
-                    </label>
-                    <label class="apx-lbl">
-                      <span>Line</span>
-                      <select id="line">
-                        <option value="A">A</option>
-                        <option value="B">B</option>
-                        <option value="C">C</option>
-                        <option value="D">D</option>
-                        <option value="E">E</option>
-                      </select>
-                    </label>
-                  </div>
-                  <label class="apx-lbl apx-lbl-full">
-                    <span>Train ID</span>
-                    <input id="trainId" type="text" value="R160-01" />
-                  </label>
-                </div>
-              </section>
-
-              <section id="settingsPanel" class="apx-tab-panel" role="tabpanel" aria-labelledby="settingsTabBtn" hidden>
-                <div class="apx-config apx-settings-grid">
-                  <label class="apx-lbl apx-lbl-full">
-                    <span>Microphone</span>
-                    <select id="micSelect">
-                      <option value="">Default microphone</option>
-                    </select>
-                  </label>
-                  <label class="apx-lbl apx-lbl-full">
-                    <span>Headset / Output</span>
-                    <select id="outputSelect">
-                      <option value="">Default output</option>
-                    </select>
-                  </label>
-                  <label class="apx-lbl apx-lbl-full">
-                    <span>Push-To-Talk Key</span>
-                    <button id="pttKeyCapture" type="button" class="apx-ptt-capture">Space</button>
-                  </label>
-                </div>
-              </section>
             </div>
 
             <!-- Numeric keypad (decorative) -->
@@ -183,13 +187,7 @@
               <button class="apx-key" tabindex="-1">9<sub>WXYZ</sub></button>
               <button class="apx-key apx-key-star" tabindex="-1">★</button>
               <button class="apx-key" tabindex="-1">0</button>
-              <button class="apx-key apx-key-hash" tabindex="-1">#</button>
-            </div>
-
-            <!-- Active units -->
-            <div class="apx-units">
-              <div class="apx-units-hdr">◉ Active Units</div>
-              <ul id="peers" class="apx-units-list"></ul>
+              <button class="apx-key apx-key-hash" tabindex="-1">CLR</button>
             </div>
 
           </div><!-- /apx-face -->
@@ -206,7 +204,17 @@
         </section><!-- /apx-radio -->
       </div><!-- /apx-wrapper -->
 
+      <div id="rightSidebarStack" class="right-sidebar-stack">
+        <aside id="memberSidebar" class="member-sidebar" hidden>
+          <h2 class="admin-sidebar-title">&#128101; Users Online</h2>
+          <div class="admin-sidebar-section">
+            <ul id="peers" class="member-online-list"></ul>
+          </div>
+        </aside>
+      </div>
+
     </main>
+
     <script src="client.js"></script>
   </body>
 </html>

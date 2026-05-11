@@ -14,11 +14,21 @@ const state = {
   blockingToneGain: null,
   selfId: null,
   selfName: "",
+  selfRole: "operator",
+  rank: "t1",
+  isAdmin: false,
+  isMod: false,
+  isT1: true,
+  currentRoom: null,
+  currentRoomName: "",
+  currentCreatorId: null,
   peers: new Map(),
   currentHolderId: null,
   currentQueue: [],
   activeSpeakerId: null,
   activeChannel: null,
+  selectedChannel: null,
+  availableChannels: [],
   lastRxActive: false,
   lastEotAt: 0,
   lastRogerAt: 0,
@@ -35,104 +45,187 @@ const state = {
   serverProbeInFlight: false,
   selectedMicDeviceId: "",
   selectedOutputDeviceId: "",
-  pttKeyCode: "Space"
+  pttKeyCode: "Space",
+  masterVolume: 1,
+  rxVolume: 1,
+  menuState: {
+    selectedItem: 0, // 0:channel 1:role 2:trainId 3:mic 4:output 5:ptt
+    editMode: false,
+    trainIdEditValue: "",
+    channelEditValue: null
+  }
 };
 
 const stunConfig = {
   iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
 };
 
-const FIXED_CHANNEL = "operations";
+const DEFAULT_CHANNEL = "operators";
+const CHANNEL_LABELS = {
+  "operators": "Operators",
+  "a1-irt": "A1-IRT",
+  "b1-bmt": "B1-BMT",
+  "b2-ind": "B2-IND",
+  "y-yard": "Y-Yard"
+};
+
 const SETTINGS_STORAGE_KEY = "openbve-radio-settings-v1";
-const authToken = new URLSearchParams(window.location.search).get("token") || "";
-let authCheckInFlight = null;
+
+// Auth state populated from server after login
+let currentUserId = null;
+let currentUsername = null;
 
 function withAuthQuery(path) {
-  if (!authToken) {
-    return path;
-  }
-
-  const urlObj = new URL(path, window.location.href);
-  if (!urlObj.searchParams.get("token")) {
-    urlObj.searchParams.set("token", authToken);
-  }
-
-  return `${urlObj.pathname}${urlObj.search}${urlObj.hash}`;
+  return path; // auth is cookie-based; no query param needed
 }
 
 async function ensureAuthenticated() {
-  if (authCheckInFlight) {
-    return authCheckInFlight;
-  }
-
-  authCheckInFlight = (async () => {
-    try {
-      const statusResponse = await fetch(withAuthQuery("/auth/status"), {
-        method: "GET",
-        cache: "no-store"
-      });
-
-      if (statusResponse.status === 404) {
-        // Backward compatibility with older server builds.
-        return true;
-      }
-
-      if (!statusResponse.ok) {
-        return false;
-      }
-
-      const statusPayload = await statusResponse.json().catch(() => null);
-      if (!statusPayload || statusPayload.enabled === false || statusPayload.authenticated === true) {
-        return true;
-      }
-
-      const password = window.prompt("Enter radio access password");
-      if (!password) {
-        setStatus("Authentication required");
-        return false;
-      }
-
-      const loginResponse = await fetch("/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password })
-      });
-
-      if (!loginResponse.ok) {
-        setStatus("Authentication failed");
-        return false;
-      }
-
+  try {
+    const res = await fetch("/auth/status", { method: "GET", cache: "no-store" });
+    if (!res.ok) return false;
+    const data = await res.json().catch(() => null);
+    if (data && data.authenticated) {
+      currentUserId = data.userId || null;
+      currentUsername = data.username || null;
       return true;
-    } catch (_err) {
-      return false;
-    } finally {
-      authCheckInFlight = null;
     }
-  })();
-
-  return authCheckInFlight;
+    // Not logged in — redirect to login page
+    window.location.href = "/login";
+    return false;
+  } catch (_err) {
+    window.location.href = "/login";
+    return false;
+  }
 }
 
 const roleEl = document.getElementById("role");
-const lineEl = document.getElementById("line");
 const trainIdEl = document.getElementById("trainId");
 const joinBtn = document.getElementById("joinBtn");
+const adminPageBtn = document.getElementById("adminPageBtn");
+const leaveServerBtn = document.getElementById("leaveServerBtn");
 const pttBtn = document.getElementById("pttBtn");
 const cleanCheckBtn = document.getElementById("cleanCheckBtn");
 const radioFrameEl = document.getElementById("radioFrame");
+const volKnobEl = document.querySelector(".apx-vol");
 const serverStatusEl = document.getElementById("serverStatus");
 const userStatusEl = document.getElementById("userStatus");
 const statusEl = document.getElementById("status");
 const channelStateEl = document.getElementById("channelState");
+const menuChannelEl = document.getElementById("menuChannel");
+const menuChannelArrowsEl = document.getElementById("menuChannelArrows");
+const menuRoleEl = document.getElementById("menuRole");
+const menuRoleArrowsEl = document.getElementById("menuRoleArrows");
+const menuTrainIdEl = document.getElementById("menuTrainId");
+const menuMicEl = document.getElementById("menuMic");
+const menuMicArrowsEl = document.getElementById("menuMicArrows");
+const menuOutputEl = document.getElementById("menuOutput");
+const menuOutputArrowsEl = document.getElementById("menuOutputArrows");
+const menuPttEl = document.getElementById("menuPtt");
+const rxValueEl = document.getElementById("rxValue");
+const volumeValueEl = document.getElementById("volumeValue");
+const serverNameEl = document.getElementById("serverName");
+const txLightEl = document.getElementById("txLight");
 const peersEl = document.getElementById("peers");
 const opsTabBtnEl = document.getElementById("opsTabBtn");
+const serverAdminTabBtnEl = document.getElementById("serverAdminTabBtn");
+const adminTabBtnEl = null; // admin is now a sidebar, not a tab
 const settingsTabBtnEl = document.getElementById("settingsTabBtn");
 const opsPanelEl = document.getElementById("opsPanel");
+const adminPanelEl = null; // admin is now a sidebar, not a tab
 const settingsPanelEl = document.getElementById("settingsPanel");
+const adminSidebarEl = document.getElementById("adminSidebar");
+const memberSidebarEl = document.getElementById("memberSidebar");
 const micSelectEl = document.getElementById("micSelect");
 const outputSelectEl = document.getElementById("outputSelect");
 const pttKeyCaptureEl = document.getElementById("pttKeyCapture");
+
+// Room management elements
+const roomSelectionModalEl = document.getElementById("roomSelectionModal");
+const joinRoomTabEl = document.getElementById("joinRoomTab");
+const createRoomTabEl = document.getElementById("createRoomTab");
+const roomListEl = document.getElementById("roomList");
+const createRoomFormEl = document.getElementById("createRoomForm");
+const newRoomNameEl = document.getElementById("newRoomName");
+const newRoomPasswordEl = document.getElementById("newRoomPassword");
+const newRoomUserNameEl = document.getElementById("newRoomUserName");
+const createRoomErrorEl = document.getElementById("createRoomError");
+const adminMembersListEl = document.getElementById("adminMembersList");
+const adminRosterListEl = document.getElementById("adminRosterList"); // kept for compat (null now)
+const rosterBtnWrapEl = document.getElementById("rosterBtnWrap");
+const openRosterBtnEl = document.getElementById("openRosterBtn");
+const rosterModalEl = document.getElementById("rosterModal");
+const closeRosterBtnEl = document.getElementById("closeRosterBtn");
+const rosterModalListEl = document.getElementById("rosterModalList");
+const openServerEditorBtnEl = document.getElementById("openServerEditorBtn");
+const serverEditorModalEl = document.getElementById("serverEditorModal");
+const closeServerEditorBtnEl = document.getElementById("closeServerEditorBtn");
+const serverEditorListEl = document.getElementById("serverEditorList");
+const adminNewPasswordEl = document.getElementById("adminNewPassword");
+const adminChangePasswordBtnEl = document.getElementById("adminChangePasswordBtn");
+
+// ── Rank system ──────────────────────────────────────────
+// Ranks: index 0 = highest
+const RANK_HIERARCHY = ["admin", "mod", "t3", "t2", "t1"];
+const RANK_LABELS    = { admin: "Admin", mod: "Moderator", t3: "T3", t2: "T2", t1: "T1" };
+
+// Session roles: index 0 = highest
+const SESSION_HIERARCHY = ["dispatcher", "operator", "listener"];
+const SESSION_LABELS    = { dispatcher: "Dispatcher", operator: "Operator", listener: "Listener" };
+
+// Session roles each rank may choose from
+function allowedSessionRoles(rank) {
+  if (rank === "t1")                 return ["listener"];
+  if (rank === "t2")                 return ["listener", "operator"];
+  return ["listener", "operator", "dispatcher"]; // t3, mod, admin
+}
+
+// Populate the session role <select> with options the user is allowed to pick.
+function populateRoleSelect(rank, selectedRole) {
+  if (!roleEl) return;
+  const roleRow = roleEl.closest(".apx-lbl") || roleEl.parentElement;
+  if (roleRow) roleRow.hidden = false; // Always show the dropdown
+
+  const allowed = allowedSessionRoles(rank);
+  roleEl.innerHTML = "";
+  for (const r of SESSION_HIERARCHY) {
+    if (!allowed.includes(r)) continue;
+    const opt = document.createElement("option");
+    opt.value = r;
+    opt.textContent = SESSION_LABELS[r] || r;
+    if (r === selectedRole) opt.selected = true;
+    roleEl.appendChild(opt);
+  }
+}
+
+function syncRoleSettingOnRadio() {
+  populateRoleSelect(state.rank, state.selfRole);
+}
+
+function showTab(tabBtn, tabPanel) {
+  // Hide all tabs
+  if (opsTabBtnEl) {
+    opsTabBtnEl.classList.remove("active");
+    opsTabBtnEl.setAttribute("aria-selected", "false");
+  }
+  if (settingsTabBtnEl) {
+    settingsTabBtnEl.classList.remove("active");
+    settingsTabBtnEl.setAttribute("aria-selected", "false");
+  }
+  if (opsPanelEl) opsPanelEl.classList.remove("active");
+  if (settingsPanelEl) settingsPanelEl.classList.remove("active");
+  if (opsPanelEl) opsPanelEl.hidden = true;
+  if (settingsPanelEl) settingsPanelEl.hidden = true;
+
+  // Show selected tab
+  if (tabBtn) {
+    tabBtn.classList.add("active");
+    tabBtn.setAttribute("aria-selected", "true");
+  }
+  if (tabPanel) {
+    tabPanel.classList.add("active");
+    tabPanel.hidden = false;
+  }
+}
 
 function setPowerState(mode) {
   if (!radioFrameEl) {
@@ -142,6 +235,17 @@ function setPowerState(mode) {
   state.powerMode = mode;
   radioFrameEl.classList.remove("power-off", "power-connecting", "power-on");
   radioFrameEl.classList.add(`power-${mode}`);
+
+  // Show room selection modal when disconnected
+  if (mode === "off") {
+    if (roomSelectionModalEl) {
+      roomSelectionModalEl.classList.add('active');
+      showRoomTab('join-room');
+    }
+  } else if (mode === "on") {
+    if (roomSelectionModalEl) roomSelectionModalEl.classList.remove('active');
+    showTab(opsTabBtnEl, opsPanelEl);
+  }
 
   if (joinBtn) {
     if (mode === "on") {
@@ -189,7 +293,7 @@ function routePeerAudio(peer, isActiveSpeaker) {
 
   if (state.cleanMonitorEnabled) {
     peer.audio.muted = false;
-    peer.audio.volume = 1.0;
+    peer.audio.volume = state.rxVolume;
     if (peer.peerGainNode) {
       peer.peerGainNode.gain.value = 0;
     }
@@ -199,7 +303,7 @@ function routePeerAudio(peer, isActiveSpeaker) {
   peer.audio.muted = true;
   peer.audio.volume = 0;
   if (peer.peerGainNode) {
-    peer.peerGainNode.gain.value = 1.0;
+    peer.peerGainNode.gain.value = state.rxVolume;
   }
 }
 
@@ -221,7 +325,9 @@ function saveSettings() {
       JSON.stringify({
         mic: state.selectedMicDeviceId || "",
         output: state.selectedOutputDeviceId || "",
-        pttKey: state.pttKeyCode || "Space"
+        pttKey: state.pttKeyCode || "Space",
+        masterVol: state.masterVolume,
+        rxVol: state.rxVolume
       })
     );
   } catch (_err) {
@@ -244,6 +350,8 @@ function loadSettings() {
     state.selectedMicDeviceId = typeof saved.mic === "string" ? saved.mic : "";
     state.selectedOutputDeviceId = typeof saved.output === "string" ? saved.output : "";
     state.pttKeyCode = typeof saved.pttKey === "string" ? saved.pttKey : "Space";
+    state.masterVolume = Number.isFinite(saved.masterVol) ? Math.max(0, Math.min(1, saved.masterVol)) : 1;
+    state.rxVolume = Number.isFinite(saved.rxVol) ? Math.max(0, Math.min(1, saved.rxVol)) : 1;
   } catch (_err) {
     // Ignore malformed setting payloads.
   }
@@ -300,20 +408,14 @@ function setUserStatus(message) {
   userStatusEl.textContent = message;
 }
 
-function setActiveTab(showSettings) {
-  if (!opsTabBtnEl || !settingsTabBtnEl || !opsPanelEl || !settingsPanelEl) {
-    return;
-  }
-
-  opsTabBtnEl.classList.toggle("active", !showSettings);
-  settingsTabBtnEl.classList.toggle("active", showSettings);
-  opsTabBtnEl.setAttribute("aria-selected", String(!showSettings));
-  settingsTabBtnEl.setAttribute("aria-selected", String(showSettings));
-
-  opsPanelEl.classList.toggle("active", !showSettings);
-  settingsPanelEl.classList.toggle("active", showSettings);
-  opsPanelEl.hidden = showSettings;
-  settingsPanelEl.hidden = !showSettings;
+function setActiveTab(tabName) {
+  // Settings tab has been removed; only "ops" tab exists now
+  if (!opsTabBtnEl || !opsPanelEl) return;
+  opsTabBtnEl.classList.add("active");
+  opsPanelEl.classList.add("active");
+  opsTabBtnEl.setAttribute("aria-selected", "true");
+  if (settingsTabBtnEl) settingsTabBtnEl.classList.remove("active");
+  if (settingsPanelEl) settingsPanelEl.classList.remove("active");
 }
 
 async function applyAudioOutputSink(audioElement) {
@@ -401,6 +503,8 @@ async function populateDeviceSelectors() {
   } catch (_err) {
     // Ignore enumeration errors when browser blocks device labels pre-permission.
   }
+  // Refresh LCD menu device labels
+  if (typeof updateMenuDisplay === "function") updateMenuDisplay();
 }
 
 async function switchMicrophone(deviceId) {
@@ -740,6 +844,7 @@ function initAudioEngine() {
   state.radioNoiseCrackleGain = crackleGain;
   state.radioNoiseFlutterDepth = noiseFlutterDepth;
   state.blockingToneGain = blockingToneGain;
+  applyVolumeState();
 
   if (state.selectedOutputDeviceId) {
     applyAudioContextOutputSink();
@@ -1100,6 +1205,53 @@ function playPttClick(isDown) {
   }, 80);
 }
 
+function playUiClick() {
+  if (!state.audioCtx) {
+    return;
+  }
+
+  const ctx = state.audioCtx;
+  const out = ctx.destination; // bypass volume knob path
+  const now = ctx.currentTime;
+
+  const mix = ctx.createGain();
+  mix.gain.setValueAtTime(0.0001, now);
+  mix.gain.exponentialRampToValueAtTime(0.11, now + 0.0015);
+  mix.gain.exponentialRampToValueAtTime(0.0001, now + 0.028);
+  mix.connect(out);
+
+  const osc = ctx.createOscillator();
+  osc.type = "triangle";
+  osc.frequency.setValueAtTime(1650, now);
+  osc.frequency.exponentialRampToValueAtTime(900, now + 0.025);
+
+  const hp = ctx.createBiquadFilter();
+  hp.type = "highpass";
+  hp.frequency.value = 650;
+
+  const gain = ctx.createGain();
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(0.2, now + 0.0015);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.026);
+
+  osc.connect(hp);
+  hp.connect(gain);
+  gain.connect(mix);
+
+  osc.start(now);
+  osc.stop(now + 0.03);
+
+  setTimeout(() => {
+    try {
+      mix.disconnect();
+      hp.disconnect();
+      gain.disconnect();
+    } catch (_err) {
+      // Ignore UI click cleanup race conditions.
+    }
+  }, 90);
+}
+
 function connectPeerAudio(peer, stream) {
   if (!state.audioCtx) {
     return;
@@ -1227,6 +1379,361 @@ function setChannelState(message) {
   channelStateEl.textContent = message;
 }
 
+function updateChannelDisplay() {
+  const chNameEl = document.querySelector(".apx-ch-name");
+  if (chNameEl) {
+    const chLabel = CHANNEL_LABELS[state.selectedChannel] || state.selectedChannel || "Operators";
+    const trainId = trainIdEl ? trainIdEl.value || "----" : "----";
+    chNameEl.textContent = `${chLabel} (${trainId})`;
+  }
+  // Update menu display
+  if (menuChannelEl) {
+    const chLabel = CHANNEL_LABELS[state.selectedChannel] || state.selectedChannel || "Operators";
+    menuChannelEl.textContent = chLabel;
+  }
+  updateMenuArrows();
+}
+
+function canAccessChannel(channelId) {
+  // Everyone can access operators channel
+  if (channelId === "operators") return true;
+  // T3, mod, and admin can access all channels
+  return state.rank === "t3" || state.rank === "mod" || state.rank === "admin";
+}
+
+function setSelectedChannel(channelId) {
+  if (!canAccessChannel(channelId)) {
+    setStatus(`Cannot access channel: ${CHANNEL_LABELS[channelId] || channelId}`);
+    return;
+  }
+  state.selectedChannel = channelId;
+  updateChannelDisplay();
+  refreshPeerList();
+  if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+    state.ws.send(JSON.stringify({
+      type: "set-channel",
+      payload: { channel: channelId }
+    }));
+  }
+}
+
+function stepSelectedChannel(direction) {
+  if (!state.availableChannels || state.availableChannels.length === 0) return;
+  
+  const currentIdx = state.availableChannels.findIndex(ch => ch.id === state.selectedChannel);
+  let nextIdx = currentIdx === -1 ? 0 : currentIdx + direction;
+  
+  // Wrap around
+  if (nextIdx < 0) nextIdx = state.availableChannels.length - 1;
+  if (nextIdx >= state.availableChannels.length) nextIdx = 0;
+  
+  const nextChannel = state.availableChannels[nextIdx];
+  if (nextChannel && nextChannel.allowed) {
+    setSelectedChannel(nextChannel.id);
+  }
+}
+
+// Menu navigation for LCD
+const MENU_ITEM_COUNT = 6; // 0:channel 1:role 2:trainId 3:mic 4:output 5:ptt
+
+function getMenuValueEls() {
+  return [menuChannelEl, menuRoleEl, menuTrainIdEl, menuMicEl, menuOutputEl, menuPttEl];
+}
+
+function updateMenuArrows() {
+  // Channel arrows
+  if (menuChannelArrowsEl && state.availableChannels.length > 0) {
+    const activeChannel = state.menuState.editMode && state.menuState.selectedItem === 0
+      ? (state.menuState.channelEditValue || state.selectedChannel)
+      : state.selectedChannel;
+    const idx = state.availableChannels.findIndex(ch => ch.id === activeChannel);
+    const hasPrev = idx > 0;
+    const hasNext = idx < state.availableChannels.length - 1;
+    menuChannelArrowsEl.textContent = !hasPrev && !hasNext ? "" : hasPrev && hasNext ? "◀ ▶" : hasPrev ? "◀" : "▶";
+  }
+
+  // Role arrows
+  if (menuRoleArrowsEl && roleEl) {
+    const total = roleEl.options.length;
+    const idx = roleEl.selectedIndex;
+    const hasPrev = idx > 0;
+    const hasNext = idx < total - 1;
+    menuRoleArrowsEl.textContent = !hasPrev && !hasNext ? "" : hasPrev && hasNext ? "◀ ▶" : hasPrev ? "◀" : "▶";
+  }
+
+  // Mic arrows
+  if (menuMicArrowsEl && micSelectEl) {
+    const total = micSelectEl.options.length;
+    const idx = micSelectEl.selectedIndex;
+    const hasPrev = idx > 0;
+    const hasNext = idx < total - 1;
+    menuMicArrowsEl.textContent = !hasPrev && !hasNext ? "" : hasPrev && hasNext ? "◀ ▶" : hasPrev ? "◀" : "▶";
+  }
+
+  // Output arrows
+  if (menuOutputArrowsEl && outputSelectEl) {
+    const total = outputSelectEl.options.length;
+    const idx = outputSelectEl.selectedIndex;
+    const hasPrev = idx > 0;
+    const hasNext = idx < total - 1;
+    menuOutputArrowsEl.textContent = !hasPrev && !hasNext ? "" : hasPrev && hasNext ? "◀ ▶" : hasPrev ? "◀" : "▶";
+  }
+}
+
+function updateMenuDisplay() {
+  if (menuChannelEl) {
+    const channelId = state.menuState.editMode && state.menuState.selectedItem === 0
+      ? (state.menuState.channelEditValue || state.selectedChannel)
+      : state.selectedChannel;
+    menuChannelEl.textContent = CHANNEL_LABELS[channelId] || channelId || "Operators";
+  }
+  if (menuRoleEl && roleEl) {
+    menuRoleEl.textContent = roleEl.options[roleEl.selectedIndex]?.text || roleEl.value;
+  }
+  if (menuTrainIdEl && !(state.menuState.editMode && state.menuState.selectedItem === 2)) {
+    menuTrainIdEl.textContent = (trainIdEl && trainIdEl.value) ? trainIdEl.value : "----";
+  }
+  if (menuMicEl && micSelectEl) {
+    const opt = micSelectEl.options[micSelectEl.selectedIndex];
+    menuMicEl.textContent = opt ? opt.text : "Default";
+  }
+  if (menuOutputEl && outputSelectEl) {
+    const opt = outputSelectEl.options[outputSelectEl.selectedIndex];
+    menuOutputEl.textContent = opt ? opt.text : "Default";
+  }
+  if (menuPttEl) {
+    menuPttEl.textContent = friendlyKeyName ? friendlyKeyName(state.pttKeyCode) : state.pttKeyCode;
+  }
+  updateMenuArrows();
+}
+
+function updateMenuItemHighlight() {
+  const values = getMenuValueEls();
+  if (!values[0]) return;
+
+  values.forEach(val => { if (val) { val.style.background = "transparent"; val.style.color = ""; } });
+
+  const active = values[state.menuState.selectedItem];
+  if (!active) return;
+
+  if (state.menuState.editMode) {
+    active.style.background = "rgba(30, 100, 220, 0.7)";
+    active.style.color = "#fff";
+  } else {
+    active.style.background = "rgba(212, 160, 24, 0.7)";
+  }
+}
+
+function menuCancelEdit() {
+  state.menuState.editMode = false;
+  state.menuState.channelEditValue = null;
+  if (state.menuState.selectedItem === 2) {
+    state.menuState.trainIdEditValue = "";
+    if (menuTrainIdEl) {
+      menuTrainIdEl.textContent = (trainIdEl && trainIdEl.value) ? trainIdEl.value : "----";
+    }
+  }
+  updateMenuDisplay();
+  updateMenuItemHighlight();
+}
+
+function menuStepItem(direction) {
+  if (state.menuState.editMode) menuCancelEdit();
+  state.menuState.selectedItem = (state.menuState.selectedItem + direction + MENU_ITEM_COUNT) % MENU_ITEM_COUNT;
+  updateMenuItemHighlight();
+}
+
+function menuChangeCurrentItem(direction) {
+  if (!state.menuState.editMode) return;
+
+  const item = state.menuState.selectedItem;
+
+  if (item === 0) {
+    if (!state.availableChannels || state.availableChannels.length === 0) return;
+
+    const currentId = state.menuState.channelEditValue || state.selectedChannel;
+    const currentIdx = state.availableChannels.findIndex(ch => ch.id === currentId);
+    let nextIdx = currentIdx === -1 ? 0 : currentIdx + direction;
+
+    if (nextIdx < 0) nextIdx = state.availableChannels.length - 1;
+    if (nextIdx >= state.availableChannels.length) nextIdx = 0;
+
+    const nextChannel = state.availableChannels[nextIdx];
+    if (!nextChannel || !nextChannel.allowed) return;
+
+    state.menuState.channelEditValue = nextChannel.id;
+    updateMenuDisplay();
+  } else if (item === 1) {
+    if (!roleEl) return;
+    const options = Array.from(roleEl.options);
+    const currentIdx = options.findIndex(opt => opt.value === roleEl.value);
+    roleEl.selectedIndex = (currentIdx + direction + options.length) % options.length;
+    roleEl.dispatchEvent(new Event("change"));
+  } else if (item === 3) {
+    if (!micSelectEl || micSelectEl.options.length === 0) return;
+    const nextIdx = Math.min(Math.max(0, micSelectEl.selectedIndex + direction), micSelectEl.options.length - 1);
+    micSelectEl.selectedIndex = nextIdx;
+    micSelectEl.dispatchEvent(new Event("change"));
+    updateMenuDisplay();
+  } else if (item === 4) {
+    if (!outputSelectEl || outputSelectEl.options.length === 0) return;
+    const nextIdx = Math.min(Math.max(0, outputSelectEl.selectedIndex + direction), outputSelectEl.options.length - 1);
+    outputSelectEl.selectedIndex = nextIdx;
+    outputSelectEl.dispatchEvent(new Event("change"));
+    updateMenuDisplay();
+  }
+}
+
+function menuConfirmSelection() {
+  const item = state.menuState.selectedItem;
+
+  if (state.menuState.editMode) {
+    if (item === 0) {
+      const nextChannelId = state.menuState.channelEditValue || state.selectedChannel;
+      if (nextChannelId && nextChannelId !== state.selectedChannel) {
+        // Sync to server immediately on confirm.
+        setSelectedChannel(nextChannelId);
+      }
+      state.menuState.channelEditValue = null;
+    } else if (item === 2) {
+      trainIdEl.value = state.menuState.trainIdEditValue;
+      trainIdEl.dispatchEvent(new Event("change"));
+      state.menuState.trainIdEditValue = "";
+      if (menuTrainIdEl) menuTrainIdEl.textContent = trainIdEl.value || "----";
+    }
+    // For PTT (5): edit mode is listening for a key; OK while capturing does nothing
+    if (item !== 5) {
+      state.menuState.editMode = false;
+      updateMenuItemHighlight();
+    }
+  } else {
+    state.menuState.editMode = true;
+
+    if (item === 0) {
+      state.menuState.channelEditValue = state.selectedChannel;
+      updateMenuDisplay();
+    } else if (item === 2) {
+      state.menuState.trainIdEditValue = "";
+      if (menuTrainIdEl) menuTrainIdEl.textContent = "----";
+    } else if (item === 5) {
+      // Start PTT capture
+      if (menuPttEl) menuPttEl.textContent = "Press key…";
+      updateMenuItemHighlight();
+      function onCapture(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (["Shift", "Control", "Alt", "Meta"].includes(e.key)) return;
+        state.pttKeyCode = e.code;
+        saveSettings();
+        if (pttKeyCaptureEl) pttKeyCaptureEl.textContent = friendlyKeyName(e.code);
+        if (menuPttEl) menuPttEl.textContent = friendlyKeyName(e.code);
+        setStatus(`PTT key set to ${friendlyKeyName(e.code)}`);
+        state.menuState.editMode = false;
+        updateMenuItemHighlight();
+        window.removeEventListener("keydown", onCapture, true);
+      }
+      window.addEventListener("keydown", onCapture, true);
+    }
+
+    updateMenuItemHighlight();
+  }
+}
+
+function menuNumberKeypad(digit) {
+  if (state.menuState.selectedItem === 2 && state.menuState.editMode) {
+    state.menuState.trainIdEditValue += digit;
+    if (menuTrainIdEl) menuTrainIdEl.textContent = state.menuState.trainIdEditValue;
+  }
+}
+
+function setKnobRotation(el, level) {
+  if (!el) return;
+  const deg = -120 + (Math.max(0, Math.min(1, level)) * 240);
+  el.style.setProperty("--knob-rot", `${deg}deg`);
+}
+
+function applyVolumeState() {
+  if (state.masterOutput) {
+    state.masterOutput.gain.value = state.masterVolume;
+  }
+
+  for (const peer of state.peers.values()) {
+    if (peer.peerGainNode && !state.cleanMonitorEnabled) {
+      peer.peerGainNode.gain.value = state.rxVolume;
+    }
+    if (peer.audio && state.cleanMonitorEnabled) {
+      peer.audio.volume = state.rxVolume;
+    }
+  }
+
+  setKnobRotation(volKnobEl, state.masterVolume);
+  if (volumeValueEl) {
+    volumeValueEl.textContent = `${Math.round(state.masterVolume * 100)}%`;
+  }
+}
+
+function updateTxLight() {
+  if (!txLightEl) return;
+  if (state.txGranted) {
+    txLightEl.className = "tx-light tx";
+  } else if (state.activeSpeakerId && state.activeSpeakerId !== state.selfId) {
+    txLightEl.className = "tx-light rx";
+  } else {
+    txLightEl.className = "tx-light idle";
+  }
+}
+
+function setupKnobControl(el, key) {
+  if (!el) return;
+
+  const setLevel = (level) => {
+    const next = Math.round(Math.max(0, Math.min(1, level)) * 10) / 10;
+    if (next === state[key]) {
+      return;
+    }
+
+    state[key] = next;
+    if (key === "masterVolume") {
+      state.rxVolume = state[key];
+    }
+
+    initAudioEngine();
+    playUiClick();
+    applyVolumeState();
+    saveSettings();
+  };
+
+  el.addEventListener("wheel", (event) => {
+    event.preventDefault();
+    const delta = event.deltaY > 0 ? -0.1 : 0.1;
+    setLevel(state[key] + delta);
+  }, { passive: false });
+
+  let dragStartY = 0;
+  let dragStartLevel = 0;
+  el.addEventListener("pointerdown", (event) => {
+    dragStartY = event.clientY;
+    dragStartLevel = state[key];
+    el.setPointerCapture(event.pointerId);
+
+    const onMove = (moveEvent) => {
+      const dy = dragStartY - moveEvent.clientY;
+      setLevel(dragStartLevel + (dy / 200));
+    };
+
+    const onUp = (upEvent) => {
+      el.releasePointerCapture(upEvent.pointerId);
+      el.removeEventListener("pointermove", onMove);
+      el.removeEventListener("pointerup", onUp);
+      el.removeEventListener("pointercancel", onUp);
+    };
+
+    el.addEventListener("pointermove", onMove);
+    el.addEventListener("pointerup", onUp);
+    el.addEventListener("pointercancel", onUp);
+  });
+}
+
 function wsSend(type, payload) {
   if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
     return;
@@ -1235,38 +1742,101 @@ function wsSend(type, payload) {
   state.ws.send(JSON.stringify({ type, payload }));
 }
 
+function getOnlineRoleClass(rank, role) {
+  const normalizedRank = String(rank || "").toLowerCase();
+  const normalizedRole = String(role || "").toLowerCase();
+
+  if (normalizedRank === "admin") return "role-admin";
+  if (normalizedRank === "mod") return "role-mod";
+  if (normalizedRank === "t3") return "role-t3";
+  if (normalizedRank === "t2") return "role-t2";
+  if (normalizedRank === "t1") return "role-t1";
+
+  if (normalizedRole === "dispatcher") return "role-dispatcher";
+  if (normalizedRole === "operator") return "role-operator";
+  if (normalizedRole === "listener") return "role-listener";
+  return "";
+}
+
 function refreshPeerList() {
+  if (!peersEl) return;
   peersEl.innerHTML = "";
 
   const entries = [...state.peers.entries()];
   const hasSelf = Boolean(state.selfId);
 
-  if (!hasSelf && entries.length === 0) {
-    const li = document.createElement("li");
-    li.textContent = "No peers connected yet";
-    peersEl.appendChild(li);
-    return;
-  }
+  const grouped = new Map();
+
+  const addUserToGroup = (channelId, userHtml, isTxActive, roleClass) => {
+    const key = channelId || DEFAULT_CHANNEL;
+    if (!grouped.has(key)) {
+      grouped.set(key, []);
+    }
+    grouped.get(key).push({ userHtml, isTxActive, roleClass });
+  };
 
   if (hasSelf) {
-    const selfLi = document.createElement("li");
-    selfLi.textContent = `You (${state.selfName || state.selfId.slice(0, 8)}) | ${getParticipantStatus(state.selfId)}`;
-    peersEl.appendChild(selfLi);
+    const selfTxActive = state.txGranted || state.currentHolderId === state.selfId || state.activeSpeakerId === state.selfId;
+    addUserToGroup(
+      state.selectedChannel || DEFAULT_CHANNEL,
+      `${escapeHtml(state.selfName || "You")} (${RANK_LABELS[state.rank] || state.rank}) (You)`,
+      selfTxActive,
+      getOnlineRoleClass(state.rank, state.selfRole)
+    );
   }
 
   for (const [peerId, peer] of entries) {
-    const li = document.createElement("li");
-    li.textContent = `${peer.name || peerId} | ${peer.role || "operator"} | line ${peer.line || "?"} | ${getParticipantStatus(peerId)}`;
-    peersEl.appendChild(li);
+    const isTxActive = state.currentHolderId === peerId || state.activeSpeakerId === peerId;
+    addUserToGroup(
+      peer.channel || DEFAULT_CHANNEL,
+      `${escapeHtml(peer.name || "User")} (${RANK_LABELS[peer.rank] || peer.rank})`,
+      isTxActive,
+      getOnlineRoleClass(peer.rank, peer.role)
+    );
+  }
+
+  const orderedChannels = (state.availableChannels && state.availableChannels.length > 0)
+    ? state.availableChannels.map(channel => channel.id)
+    : Object.keys(CHANNEL_LABELS);
+
+  for (const channelId of grouped.keys()) {
+    if (!orderedChannels.includes(channelId)) orderedChannels.push(channelId);
+  }
+
+  for (const channelId of orderedChannels) {
+    const header = document.createElement("li");
+    header.className = "member-channel-header";
+    header.textContent = CHANNEL_LABELS[channelId] || channelId;
+    peersEl.appendChild(header);
+
+    const users = grouped.get(channelId) || [];
+    for (const user of users) {
+      const li = document.createElement("li");
+      li.className = `member-online-item ${user.roleClass || ""}`.trim();
+      li.innerHTML = `
+        <span class="member-online-name">${user.userHtml}</span>
+        <span class="tx-badge ${user.isTxActive ? "active" : ""}">TX</span>
+      `;
+      peersEl.appendChild(li);
+    }
   }
 }
 
 function ensurePeer(peerInfo) {
   if (state.peers.has(peerInfo.id)) {
     const existing = state.peers.get(peerInfo.id);
-    existing.name = peerInfo.name;
-    existing.role = peerInfo.role;
-    existing.line = peerInfo.line;
+    if (typeof peerInfo.name === "string" && peerInfo.name.trim()) {
+      existing.name = peerInfo.name;
+    }
+    if (typeof peerInfo.role === "string" && peerInfo.role.trim()) {
+      existing.role = peerInfo.role;
+    }
+    if (typeof peerInfo.channel === "string" && peerInfo.channel.trim()) {
+      existing.channel = peerInfo.channel;
+    }
+    if (typeof peerInfo.rank === "string" && peerInfo.rank.trim()) {
+      existing.rank = peerInfo.rank;
+    }
     return existing;
   }
 
@@ -1308,9 +1878,10 @@ function ensurePeer(peerInfo) {
 
   const peer = {
     id: peerInfo.id,
-    name: peerInfo.name,
-    role: peerInfo.role,
-    line: peerInfo.line,
+    name: (typeof peerInfo.name === "string" && peerInfo.name.trim()) ? peerInfo.name : "User",
+    role: (typeof peerInfo.role === "string" && peerInfo.role.trim()) ? peerInfo.role : "operator",
+    rank: (typeof peerInfo.rank === "string" && peerInfo.rank.trim()) ? peerInfo.rank : "t1",
+    channel: (typeof peerInfo.channel === "string" && peerInfo.channel.trim()) ? peerInfo.channel : "operators",
     pc,
     audio,
     sourceNode: null,
@@ -1344,7 +1915,7 @@ async function createOffer(peerInfo) {
 }
 
 async function handleSignal(from, data) {
-  const peer = ensurePeer({ id: from, name: from, role: "operator", line: "?" });
+  const peer = ensurePeer({ id: from, role: "operator" });
 
   if (data.description) {
     const desc = data.description;
@@ -1373,8 +1944,11 @@ function applyTxState(payload) {
   state.activeChannel = payload.active ? payload.channel : null;
   let isReceivingAudio = false;
 
+  // Only listen if we're on the same channel as the speaker
+  const isListenerOnChannel = state.selectedChannel === payload.channel;
+
   for (const [peerId, peer] of state.peers.entries()) {
-    if (payload.active && peerId === payload.speakerId) {
+    if (payload.active && peerId === payload.speakerId && isListenerOnChannel) {
       routePeerAudio(peer, true);
       isReceivingAudio = true;
     } else {
@@ -1397,13 +1971,17 @@ function applyTxState(payload) {
 
   state.lastRxActive = isReceivingAudio;
   syncBlockingTone();
+  refreshPeerList();
+  updateTxLight();
 
   if (!payload.active) {
     setChannelState("Channel idle");
     return;
   }
 
-  setChannelState(`RX ${payload.channel.toUpperCase()} from ${payload.speakerId.slice(0, 8)}`);
+  if (payload.speakerId !== state.selfId) {
+    setChannelState("RX");
+  }
 }
 
 function setTx(enabled) {
@@ -1422,11 +2000,12 @@ function setTx(enabled) {
 
   updateSelfStatus();
   syncBlockingTone();
+  updateTxLight();
 }
 
 function updatePresence() {
   wsSend("set-presence", {
-    line: lineEl.value,
+    role: roleEl ? roleEl.value : undefined,
     trainId: trainIdEl.value
   });
 }
@@ -1615,7 +2194,7 @@ function drawMicVisualizer(canvas) {
   ctx.fillRect(0, height - 3, levelWidth, 3);
 }
 
-async function join() {
+async function join(roomId, userName) {
   if (state.ws) {
     state.ws.close();
   }
@@ -1637,7 +2216,7 @@ async function join() {
 
   const wsProtocol = location.protocol === "https:" ? "wss" : "ws";
   const wsBaseUrl = `${wsProtocol}://${location.host}`;
-  const wsUrl = authToken ? `${wsBaseUrl}?token=${encodeURIComponent(authToken)}` : wsBaseUrl;
+  const wsUrl = wsBaseUrl; // auth is cookie-based
   state.ws = new WebSocket(wsUrl);
 
   state.ws.onopen = () => {
@@ -1646,8 +2225,9 @@ async function join() {
     setUserStatus("User: joining...");
 
     wsSend("join", {
+      roomId: roomId || state.currentRoom || "mta-main",
+      userName: userName || undefined,
       role: roleEl.value,
-      line: lineEl.value,
       trainId: trainIdEl.value
     });
 
@@ -1688,6 +2268,17 @@ async function join() {
     updateSelfStatus();
     syncBlockingTone();
     probeServerStatus();
+
+    // Hide admin sidebar and roster modal on disconnect
+    if (adminSidebarEl) adminSidebarEl.hidden = true;
+    if (memberSidebarEl) memberSidebarEl.hidden = true;
+    if (serverAdminTabBtnEl) {
+      serverAdminTabBtnEl.hidden = true;
+      serverAdminTabBtnEl.classList.remove("active");
+    }
+    if (rosterModalEl) rosterModalEl.hidden = true;
+    if (rosterBtnWrapEl) rosterBtnWrapEl.hidden = true;
+    if (adminPageBtn) adminPageBtn.hidden = true;
   };
 
   state.ws.onerror = () => {
@@ -1704,10 +2295,80 @@ async function join() {
     if (msg.type === "joined") {
       state.selfId = msg.payload.self.id;
       state.selfName = msg.payload.self.name || "";
+      state.selfRole = msg.payload.self.role || "listener";
+      state.rank     = msg.payload.rank || "t1";
+      state.isAdmin  = msg.payload.isAdmin || false;
+      state.isMod    = msg.payload.isMod   || false;
+      state.isT1     = msg.payload.isT1    !== false ? (state.rank === "t1") : false;
+      state.currentRoom = msg.payload.roomId;
+      state.currentRoomName = msg.payload.roomName || "Radio";
+      state.currentCreatorId = msg.payload.creatorId;
+
+      // Update server name display
+      if (serverNameEl) {
+        serverNameEl.textContent = state.currentRoomName;
+      }
+
+      // Set auto-assigned train ID from server
+      if (msg.payload.self.trainId && trainIdEl) {
+        trainIdEl.value = msg.payload.self.trainId;
+      }
+
+      // Keep role selector synced with server role/rank
+      syncRoleSettingOnRadio();
+      
+      // Setup available channels from server
+      if (Array.isArray(msg.payload.channels)) {
+        state.availableChannels = msg.payload.channels;
+        // Set selected channel to first allowed channel
+        const firstAllowed = state.availableChannels.find(ch => ch.allowed);
+        if (firstAllowed) {
+          state.selectedChannel = firstAllowed.id;
+          updateChannelDisplay();
+        }
+      }
+      
       pttBtn.disabled = false;
-      setStatus(`Connected as ${msg.payload.self.name}`);
+      setStatus(`Connected as ${msg.payload.self.name}${state.isT1 ? ' (T1 \u2014 no TX)' : ''}`);
+      
+      // T1 rank cannot transmit
+      if (state.isT1) {
+        pttBtn.disabled = true;
+        pttBtn.title = 'Ask an admin to assign you a higher rank to transmit';
+      }
+      
+      // Update transmission light
+      updateTxLight();
+      
+      // Always show admin sidebar for staff when connected
+      if (adminSidebarEl) {
+        adminSidebarEl.hidden = !(state.isAdmin || state.isMod);
+        if (!adminSidebarEl.hidden) loadAdminMembers();
+      }
+      if (memberSidebarEl) {
+        memberSidebarEl.hidden = false;
+      }
+      if (rosterBtnWrapEl) {
+        rosterBtnWrapEl.hidden = !(state.isAdmin || state.isMod);
+      }
+      if (serverAdminTabBtnEl) {
+        const canAdmin = state.isAdmin || state.isMod;
+        serverAdminTabBtnEl.hidden = !canAdmin;
+        serverAdminTabBtnEl.classList.toggle("active", canAdmin && adminSidebarEl && !adminSidebarEl.hidden);
+      }
+      if (adminPageBtn) {
+        adminPageBtn.hidden = !(state.isAdmin || state.isMod);
+      }
+      
+      // Hide room selection modal
+      if (roomSelectionModalEl) {
+        roomSelectionModalEl.classList.remove('active');
+      }
+      
       initAudioEngine();
       startMicVisualization();
+      updateChannelDisplay(); // Update to show auto-assigned train ID in title
+      updateMenuDisplay();    // Show auto-assigned train ID in TID menu row
       refreshPeerList();
       updateSelfStatus();
 
@@ -1720,11 +2381,29 @@ async function join() {
 
     if (msg.type === "peer-joined") {
       ensurePeer(msg.payload);
+      refreshPeerList();
+      if (adminSidebarEl && !adminSidebarEl.hidden) loadAdminMembers();
       return;
     }
 
     if (msg.type === "peer-updated") {
       ensurePeer(msg.payload);
+      refreshPeerList();
+      return;
+    }
+
+    if (msg.type === "channel-changed") {
+      const changedId = msg.payload.id;
+      const changedChannel = msg.payload.channel;
+
+      if (changedId && changedId !== state.selfId) {
+        ensurePeer({ id: changedId, channel: changedChannel });
+        refreshPeerList();
+        return;
+      }
+
+      state.selectedChannel = changedChannel;
+      updateChannelDisplay();
       refreshPeerList();
       return;
     }
@@ -1806,6 +2485,7 @@ async function join() {
       }
       state.peers.delete(msg.payload.id);
       refreshPeerList();
+      if (adminSidebarEl && !adminSidebarEl.hidden) loadAdminMembers();
       return;
     }
 
@@ -1850,40 +2530,134 @@ async function join() {
 
     if (msg.type === "error") {
       setStatus(`Server error: ${msg.payload.message}`);
+      return;
+    }
+
+    if (msg.type === "kicked") {
+      setStatus("You were kicked from the server");
+      setPowerState("off");
+      if (state.ws) {
+        state.ws.close();
+      }
+      return;
+    }
+
+    if (msg.type === "peer-session-role-changed") {
+      const peer = state.peers.get(msg.payload.id);
+      if (peer) {
+        peer.role = msg.payload.role;
+        refreshPeerList();
+      }
+      // If it's our own session role that changed
+      if (msg.payload.id === state.selfId) {
+        state.selfRole = msg.payload.role;
+        syncRoleSettingOnRadio();
+        const isListener = msg.payload.role === "listener";
+        pttBtn.disabled = isListener;
+        pttBtn.title = isListener ? 'Ask an admin to assign you a higher rank to transmit' : '';
+        setStatus(`Session role updated: ${SESSION_LABELS[msg.payload.role] || msg.payload.role}`);
+        if (adminSidebarEl && !adminSidebarEl.hidden) loadAdminMembers();
+      }
+      if (adminSidebarEl && !adminSidebarEl.hidden) loadAdminMembers();
+      return;
+    }
+
+    if (msg.type === "peer-rank-changed") {
+      const peer = state.peers.get(msg.payload.id);
+      if (peer) {
+        peer.rank = msg.payload.rank;
+        peer.role = msg.payload.role;
+        refreshPeerList();
+      }
+      // If it's our own rank that changed, update state and repopulate dropdown
+      if (msg.payload.id === state.selfId) {
+        state.rank     = msg.payload.rank;
+        state.selfRole = msg.payload.role;
+        state.isAdmin  = msg.payload.rank === "admin";
+        state.isMod    = msg.payload.rank === "mod";
+        state.isT1     = msg.payload.rank === "t1";
+        if (adminSidebarEl) adminSidebarEl.hidden = !(state.isAdmin || state.isMod);
+        if (memberSidebarEl) memberSidebarEl.hidden = false;
+        syncRoleSettingOnRadio();
+        if (rosterBtnWrapEl) rosterBtnWrapEl.hidden = !(state.isAdmin || state.isMod);
+        if (serverAdminTabBtnEl) {
+          const canAdmin = state.isAdmin || state.isMod;
+          serverAdminTabBtnEl.hidden = !canAdmin;
+          serverAdminTabBtnEl.classList.toggle("active", canAdmin && adminSidebarEl && !adminSidebarEl.hidden);
+        }
+        if (adminPageBtn) {
+          adminPageBtn.hidden = !(state.isAdmin || state.isMod);
+        }
+        if (state.isT1) {
+          pttBtn.disabled = true;
+          pttBtn.title = 'Ask an admin to assign you a higher rank to transmit';
+          setStatus('Rank updated: T1 (no TX)');
+        } else {
+          pttBtn.disabled = false;
+          pttBtn.title = '';
+          setStatus(`Rank updated: ${RANK_LABELS[msg.payload.rank] || msg.payload.rank}`);
+        }
+        if (adminSidebarEl && !adminSidebarEl.hidden) loadAdminMembers();
+      }
+      if (adminSidebarEl && !adminSidebarEl.hidden) loadAdminMembers();
+      return;
+    }
+
+    if (msg.type === "channels-updated") {
+      if (Array.isArray(msg.payload.channels)) {
+        state.availableChannels = msg.payload.channels;
+        // Check if current channel is still allowed
+        const stillAllowed = state.availableChannels.find(ch => ch.id === state.selectedChannel && ch.allowed);
+        if (!stillAllowed) {
+          // Switch to first allowed channel
+          const firstAllowed = state.availableChannels.find(ch => ch.allowed);
+          if (firstAllowed) {
+            state.selectedChannel = firstAllowed.id;
+            updateChannelDisplay();
+          }
+        }
+        updateMenuDisplay();
+        refreshPeerList();
+      }
+      return;
     }
   };
 }
 
-joinBtn.addEventListener("click", () => {
-  if (state.ws && (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING)) {
-    setStatus("Disconnecting...");
-    state.ws.close();
-    return;
-  }
-
-  join().catch((err) => {
-    setPowerState("off");
-    setStatus(`Join failed: ${err.message}`);
-  });
+if (roleEl) roleEl.addEventListener("change", () => {
+  updateMenuDisplay();
+  updatePresence();
+});
+trainIdEl.addEventListener("input", () => {
+  // Filter to only numeric characters
+  trainIdEl.value = trainIdEl.value.replace(/[^0-9]/g, "");
 });
 
-lineEl.addEventListener("change", updatePresence);
-trainIdEl.addEventListener("change", updatePresence);
+trainIdEl.addEventListener("change", () => {
+  updateChannelDisplay();
+  updateMenuDisplay();
+  updatePresence();
+});
 
 function muteAllPeers(muted) {
   for (const peer of state.peers.values()) {
     if (peer.peerGainNode) {
-      peer.peerGainNode.gain.value = muted ? 0 : 1.0;
+      peer.peerGainNode.gain.value = muted ? 0 : state.rxVolume;
     }
     if (peer.audio) {
       peer.audio.muted = muted || !state.cleanMonitorEnabled;
-      peer.audio.volume = muted ? 0 : 1.0;
+      peer.audio.volume = muted ? 0 : state.rxVolume;
     }
   }
 }
 
 function pttDown() {
   if (state.powerMode !== "on") {
+    return;
+  }
+
+  if (state.isT1) {
+    setStatus('T1 rank cannot transmit. Ask an admin to assign you a higher rank.');
     return;
   }
 
@@ -1897,7 +2671,7 @@ function pttDown() {
   muteAllPeers(true);
   syncBlockingTone();
   playPttClick(true);
-  wsSend("ptt-request", { channel: FIXED_CHANNEL });
+  wsSend("ptt-request", { channel: state.selectedChannel || DEFAULT_CHANNEL });
 }
 
 function pttUp() {
@@ -1920,6 +2694,501 @@ function forcePttRelease() {
   }
 
   pttUp();
+}
+
+// Room management functions
+async function loadRoomsList() {
+  if (!roomListEl) return;
+
+  roomListEl.innerHTML = '<div class="loading">Loading servers...</div>';
+
+  try {
+    const response = await fetch(withAuthQuery("/api/rooms"), {
+      method: "GET",
+      cache: "no-store"
+    });
+
+    if (!response.ok) {
+      roomListEl.innerHTML = '<div class="error">Failed to load servers</div>';
+      return;
+    }
+
+    const data = await response.json();
+    const rooms = data.rooms || [];
+
+    if (rooms.length === 0) {
+      roomListEl.innerHTML = '<div class="empty-state">No servers available. Create one!</div>';
+      return;
+    }
+
+    roomListEl.innerHTML = rooms.map(room => `
+      <div class="room-card">
+        <div class="room-header">
+          <h3>${escapeHtml(room.name || 'Untitled Server')}</h3>
+        </div>
+        <div class="room-info">
+          <div class="room-users-label"><strong>${room.memberCount}</strong> user${room.memberCount !== 1 ? 's' : ''} online:</div>
+          ${room.members && room.members.length > 0 ? `<div class="room-members">${room.members.map(m => escapeHtml(m.name)).join(', ')}</div>` : '<div class="room-members"><em>None</em></div>'}
+        </div>
+        <button class="btn-join-room" data-room-id="${escapeHtml(room.id)}">
+          Join
+        </button>
+      </div>
+    `).join('');
+
+    // Add event listeners to join buttons
+    document.querySelectorAll('.btn-join-room').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        const roomId = btn.dataset.roomId;
+        const userName = currentUsername || generateRoomUserName();
+        joinRoom(roomId, userName);
+      });
+    });
+  } catch (err) {
+    roomListEl.innerHTML = '<div class="error">Error loading servers</div>';
+  }
+}
+
+function generateRoomUserName() {
+  const names = ['Operator', 'Dispatcher', 'Control'];
+  return `${names[Math.floor(Math.random() * names.length)]}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+async function joinRoom(roomId, userName) {
+  state.currentRoom = roomId;
+
+  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+    await join(roomId, userName);
+    return;
+  }
+
+  // If already connected, send join message
+  wsSend("join", {
+    roomId,
+    userName,
+    role: roleEl.value,
+    trainId: trainIdEl.value
+  });
+
+  if (roomSelectionModalEl) {
+    roomSelectionModalEl.classList.remove('active');
+  }
+}
+
+function showRoomTab(tabName) {
+  // Hide all tabs
+  document.querySelectorAll('.modal-tab-content').forEach(el => {
+    el.classList.remove('active');
+    el.hidden = true;
+  });
+
+  // Remove active class from all buttons
+  document.querySelectorAll('.modal-tab').forEach(btn => {
+    btn.classList.remove('active');
+  });
+
+  // Show selected tab
+  const tabEl = document.getElementById(tabName);
+  if (tabEl) {
+    tabEl.classList.add('active');
+    tabEl.hidden = false;
+  }
+
+  // Mark button as active
+  if (tabName === 'join-room' && joinRoomTabEl) {
+    joinRoomTabEl.classList.add('active');
+    loadRoomsList();
+  } else if (tabName === 'create-room' && createRoomTabEl) {
+    createRoomTabEl.classList.add('active');
+  }
+}
+
+function roleBadge(rank) {
+  const label = RANK_LABELS[rank] || rank;
+  return `<span class="role-badge role-badge--${escapeHtml(rank)}">${escapeHtml(label)}</span>`;
+}
+
+async function loadAdminMembers() {
+  if (!state.currentRoom || !adminMembersListEl) return;
+
+  adminMembersListEl.innerHTML = '<div class="loading">Loading...</div>';
+
+  try {
+    const membersRes = await fetch(withAuthQuery(`/api/rooms/${state.currentRoom}/members`), { method: "GET", cache: "no-store" });
+
+    if (!membersRes.ok) {
+      adminMembersListEl.innerHTML = '<div class="error">Failed to load members</div>';
+      return;
+    }
+
+    const { members = [] } = await membersRes.json();
+    adminMembersListEl.innerHTML = members.length === 0
+      ? '<div class="empty-state">No one online</div>'
+      : members.map(member => {
+          const isStaff = state.isAdmin || state.isMod;
+          const isSelf = member.id === state.selfId;
+          const isCreator = member.id === state.currentCreatorId;
+          // Session roles the member is allowed based on their rank
+          const memberAllowed = allowedSessionRoles(member.rank || "t1");
+          return `
+          <div class="member-item">
+            <div class="member-info">
+              <div class="member-name">${escapeHtml(member.name)}${isSelf ? ' <small>(You)</small>' : ''}</div>
+              ${roleBadge(member.rank || "t1")}
+            </div>
+            <div class="member-actions">
+              ${isStaff && !isSelf && !isCreator ? `
+                <select class="member-role-select" data-member-id="${escapeHtml(member.id)}">
+                  ${memberAllowed.map(r =>
+                    `<option value="${r}" ${member.role === r ? 'selected' : ''}>${SESSION_LABELS[r] || r}</option>`
+                  ).join('')}
+                </select>
+                <button class="btn-kick" data-member-id="${escapeHtml(member.id)}">Kick</button>
+              ` : isCreator && !isSelf ? '<small>Creator</small>' : ''}
+            </div>
+          </div>`;
+        }).join('');
+
+    adminMembersListEl.querySelectorAll('.member-role-select').forEach(select => {
+      select.addEventListener('change', async (e) => {
+        const memberId = e.target.dataset.memberId;
+        const newSessionRole = e.target.value;
+        try {
+          const r = await fetch(withAuthQuery(`/api/rooms/${state.currentRoom}/members/${memberId}/role`), {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ role: newSessionRole })
+          });
+          if (!r.ok) { setStatus('Failed to update role'); loadAdminMembers(); return; }
+          setStatus('Session role updated');
+        } catch { setStatus('Error updating role'); }
+      });
+    });
+
+    adminMembersListEl.querySelectorAll('.btn-kick').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const memberId = btn.dataset.memberId;
+        if (!confirm('Kick this user?')) return;
+        try {
+          const r = await fetch(withAuthQuery(`/api/rooms/${state.currentRoom}/members/${memberId}/kick`), {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({})
+          });
+          if (!r.ok) { setStatus('Failed to kick user'); return; }
+          setStatus('User kicked');
+          loadAdminMembers();
+        } catch { setStatus('Error kicking user'); }
+      });
+    });
+  } catch (err) {
+    adminMembersListEl.innerHTML = '<div class="error">Error loading members</div>';
+  }
+}
+
+async function loadRosterModal() {
+  if (!state.currentRoom || !rosterModalListEl) return;
+
+  rosterModalListEl.innerHTML = '<div class="loading">Loading...</div>';
+
+  try {
+    const res = await fetch(withAuthQuery(`/api/rooms/${state.currentRoom}/roster`), { method: "GET", cache: "no-store" });
+    if (!res.ok) {
+      rosterModalListEl.innerHTML = '<div class="error">Failed to load roster</div>';
+      return;
+    }
+
+    const { roster = [] } = await res.json();
+    rosterModalListEl.innerHTML = roster.length === 0
+      ? '<div class="empty-state">No saved roles yet</div>'
+      : roster.map(entry => `
+          <div class="member-item ${entry.online ? 'roster-online' : 'roster-offline'}">
+            <div class="member-info">
+              <div class="member-name">
+                <span class="roster-dot" title="${entry.online ? 'Online' : 'Offline'}"></span>
+                ${escapeHtml(entry.username)}
+              </div>
+              ${roleBadge(entry.rank || "t1")}
+            </div>
+            <div class="member-actions">
+              ${entry.userId === currentUserId ? '<small>You</small>' : `
+                <select class="roster-role-select" data-user-id="${escapeHtml(entry.userId)}">
+                  <option value="t1" ${entry.rank === 't1' ? 'selected' : ''}>T1</option>
+                  <option value="t2" ${entry.rank === 't2' ? 'selected' : ''}>T2</option>
+                  <option value="t3" ${entry.rank === 't3' ? 'selected' : ''}>T3</option>
+                  ${state.isAdmin ? `<option value="mod" ${entry.rank === 'mod' ? 'selected' : ''}>Moderator</option>` : ''}
+                </select>
+              `}
+            </div>
+          </div>
+        `).join('');
+
+    rosterModalListEl.querySelectorAll('.roster-role-select').forEach(select => {
+      select.addEventListener('change', async (e) => {
+        const userId = e.target.dataset.userId;
+        const newRank = e.target.value;
+        try {
+          const r = await fetch(withAuthQuery(`/api/rooms/${state.currentRoom}/roster/${userId}/role`), {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ role: newRank })
+          });
+          if (!r.ok) { setStatus('Failed to update rank'); loadRosterModal(); return; }
+          setStatus('Rank updated');
+          loadRosterModal();
+        } catch { setStatus('Error updating rank'); }
+      });
+    });
+  } catch (err) {
+    rosterModalListEl.innerHTML = '<div class="error">Error loading roster</div>';
+  }
+}
+
+async function loadServerEditorModal() {
+  if (!serverEditorListEl) return;
+
+  serverEditorListEl.innerHTML = '<div class="loading">Loading servers...</div>';
+
+  try {
+    const res = await fetch(withAuthQuery('/api/rooms'), { method: 'GET', cache: 'no-store' });
+    if (!res.ok) {
+      serverEditorListEl.innerHTML = '<div class="error">Failed to load servers</div>';
+      return;
+    }
+
+    const data = await res.json();
+    const rooms = Array.isArray(data.rooms) ? data.rooms : [];
+    if (rooms.length === 0) {
+      serverEditorListEl.innerHTML = '<div class="empty-state">No servers found</div>';
+      return;
+    }
+
+    serverEditorListEl.innerHTML = rooms.map(room => `
+      <div class="member-item server-editor-item">
+        <div class="member-info">
+          <div class="member-name">${escapeHtml(room.name || 'Untitled Server')}</div>
+          <div class="member-role">ID: ${escapeHtml(room.id || '')}</div>
+        </div>
+        <div class="member-actions server-editor-actions">
+          <input class="server-name-input" data-room-id="${escapeHtml(room.id || '')}" type="text" value="${escapeHtml(room.name || '')}" maxlength="80" />
+          <button class="admin-sidebar-btn btn-rename-server" data-room-id="${escapeHtml(room.id || '')}" type="button">Rename</button>
+          <button class="btn-kick btn-delete-server" data-room-id="${escapeHtml(room.id || '')}" type="button">Delete</button>
+        </div>
+      </div>
+    `).join('');
+
+    serverEditorListEl.querySelectorAll('.btn-rename-server').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const roomId = btn.dataset.roomId;
+        const input = serverEditorListEl.querySelector(`.server-name-input[data-room-id="${roomId}"]`);
+        const nextName = input ? input.value.trim() : '';
+        if (!nextName) {
+          setStatus('Server name cannot be empty');
+          return;
+        }
+
+        try {
+          const r = await fetch(withAuthQuery(`/api/rooms/${roomId}`), {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: nextName })
+          });
+          if (!r.ok) {
+            const err = await r.json().catch(() => ({}));
+            setStatus(err.error || 'Failed to rename server');
+            return;
+          }
+
+          if (state.currentRoom === roomId) {
+            state.currentRoomName = nextName;
+            if (serverNameEl) serverNameEl.textContent = nextName;
+          }
+          setStatus('Server renamed');
+          loadServerEditorModal();
+          loadRoomsList();
+        } catch (_err) {
+          setStatus('Error renaming server');
+        }
+      });
+    });
+
+    serverEditorListEl.querySelectorAll('.btn-delete-server').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const roomId = btn.dataset.roomId;
+        if (!confirm('Delete this server? All connected users will be disconnected.')) return;
+
+        try {
+          const r = await fetch(withAuthQuery(`/api/rooms/${roomId}`), { method: 'DELETE' });
+          if (!r.ok) {
+            const err = await r.json().catch(() => ({}));
+            setStatus(err.error || 'Failed to delete server');
+            return;
+          }
+          setStatus('Server deleted');
+          loadServerEditorModal();
+          loadRoomsList();
+        } catch (_err) {
+          setStatus('Error deleting server');
+        }
+      });
+    });
+  } catch (_err) {
+    serverEditorListEl.innerHTML = '<div class="error">Error loading servers</div>';
+  }
+}
+
+// Roster modal open/close
+if (openRosterBtnEl) {
+  openRosterBtnEl.addEventListener('click', () => {
+    if (rosterModalEl) {
+      rosterModalEl.hidden = false;
+      loadRosterModal();
+    }
+  });
+}
+if (closeRosterBtnEl) {
+  closeRosterBtnEl.addEventListener('click', () => {
+    if (rosterModalEl) rosterModalEl.hidden = true;
+  });
+}
+// Close on backdrop click
+if (rosterModalEl) {
+  rosterModalEl.addEventListener('click', (e) => {
+    if (e.target === rosterModalEl) rosterModalEl.hidden = true;
+  });
+}
+
+if (openServerEditorBtnEl) {
+  openServerEditorBtnEl.addEventListener('click', () => {
+    if (serverEditorModalEl) {
+      serverEditorModalEl.hidden = false;
+      loadServerEditorModal();
+    }
+  });
+}
+
+if (closeServerEditorBtnEl) {
+  closeServerEditorBtnEl.addEventListener('click', () => {
+    if (serverEditorModalEl) serverEditorModalEl.hidden = true;
+  });
+}
+
+if (serverEditorModalEl) {
+  serverEditorModalEl.addEventListener('click', (e) => {
+    if (e.target === serverEditorModalEl) serverEditorModalEl.hidden = true;
+  });
+}
+
+joinBtn.addEventListener("click", () => {
+  if (state.ws && (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING)) {
+    setStatus("Disconnecting...");
+    state.ws.close();
+    return;
+  }
+
+  // Show room selection modal
+  if (roomSelectionModalEl) {
+    roomSelectionModalEl.classList.add('active');
+    showRoomTab('join-room');
+  } else {
+    join().catch((err) => {
+      setPowerState("off");
+      setStatus(`Join failed: ${err.message}`);
+    });
+  }
+});
+
+if (opsTabBtnEl) {
+  opsTabBtnEl.addEventListener("click", () => {
+    showTab(opsTabBtnEl, opsPanelEl);
+  });
+}
+
+if (serverAdminTabBtnEl) {
+  serverAdminTabBtnEl.addEventListener("click", () => {
+    const canAdmin = state.isAdmin || state.isMod;
+    if (!canAdmin || !adminSidebarEl) return;
+
+    adminSidebarEl.hidden = !adminSidebarEl.hidden;
+    serverAdminTabBtnEl.classList.toggle("active", !adminSidebarEl.hidden);
+
+    if (!adminSidebarEl.hidden) {
+      loadAdminMembers();
+    }
+  });
+}
+
+if (settingsTabBtnEl) {
+  settingsTabBtnEl.addEventListener("click", () => {
+    showTab(settingsTabBtnEl, settingsPanelEl);
+  });
+}
+
+// D-pad navigation for menu system
+const channelUpBtn = document.querySelector(".apx-dpad-up");
+const channelDownBtn = document.querySelector(".apx-dpad-dn");
+const navLeftBtn = document.getElementById("navLeftBtn");
+const navRightBtn = document.getElementById("navRightBtn");
+const dpadOkBtn = document.querySelector(".apx-dpad-ok");
+
+if (channelUpBtn) {
+  channelUpBtn.addEventListener("click", () => menuStepItem(-1));
+}
+
+if (channelDownBtn) {
+  channelDownBtn.addEventListener("click", () => menuStepItem(1));
+}
+
+if (navLeftBtn) {
+  navLeftBtn.addEventListener("click", () => menuChangeCurrentItem(-1));
+}
+
+if (navRightBtn) {
+  navRightBtn.addEventListener("click", () => menuChangeCurrentItem(1));
+}
+
+if (dpadOkBtn) {
+  dpadOkBtn.addEventListener("click", menuConfirmSelection);
+}
+
+// Number keypad handlers for train ID editing
+const keypadKeys = document.querySelectorAll(".apx-key");
+const keypadStarBtn = document.querySelector(".apx-key-star");
+const keypadHashBtn = document.querySelector(".apx-key-hash");
+
+keypadKeys.forEach(btn => {
+  btn.addEventListener("click", () => {
+    const digit = btn.textContent.charAt(0);
+    if (/\d/.test(digit)) {
+      menuNumberKeypad(digit);
+    }
+  });
+});
+
+if (keypadStarBtn) {
+  keypadStarBtn.addEventListener("click", () => {
+    // Star button = Backspace (delete last character)
+    if (state.menuState.selectedItem === 2 && state.menuState.editMode) {
+      state.menuState.trainIdEditValue = state.menuState.trainIdEditValue.slice(0, -1);
+      if (menuTrainIdEl) {
+        menuTrainIdEl.textContent = state.menuState.trainIdEditValue || "----";
+      }
+    }
+  });
+}
+
+if (keypadHashBtn) {
+  keypadHashBtn.addEventListener("click", () => {
+    // CLR button clears all train ID digits
+    if (state.menuState.selectedItem === 2 && state.menuState.editMode) {
+      state.menuState.trainIdEditValue = "";
+      if (menuTrainIdEl) {
+        menuTrainIdEl.textContent = "----";
+      }
+    }
+  });
 }
 
 pttBtn.addEventListener("mousedown", pttDown);
@@ -1972,6 +3241,13 @@ window.addEventListener("blur", () => {
 });
 
 loadSettings();
+state.selectedChannel = DEFAULT_CHANNEL;
+updateChannelDisplay();
+updateMenuDisplay();
+updateMenuItemHighlight();
+state.rxVolume = state.masterVolume;
+setupKnobControl(volKnobEl, "masterVolume");
+applyVolumeState();
 
 if (cleanCheckBtn) {
   cleanCheckBtn.addEventListener("click", () => {
@@ -1983,9 +3259,9 @@ if (cleanCheckBtn) {
 }
 
 if (opsTabBtnEl && settingsTabBtnEl) {
-  opsTabBtnEl.addEventListener("click", () => setActiveTab(false));
+  opsTabBtnEl.addEventListener("click", () => setActiveTab("ops"));
   settingsTabBtnEl.addEventListener("click", async () => {
-    setActiveTab(true);
+    setActiveTab("settings");
     await populateDeviceSelectors();
   });
 }
@@ -2035,6 +3311,7 @@ if (pttKeyCaptureEl) {
 if (micSelectEl) {
   micSelectEl.addEventListener("change", async () => {
     await switchMicrophone(micSelectEl.value || "");
+    updateMenuDisplay();
   });
 }
 
@@ -2044,6 +3321,7 @@ if (outputSelectEl) {
     saveSettings();
     await applyOutputDeviceToPeers();
     setStatus("Audio output updated");
+    updateMenuDisplay();
   });
 }
 
@@ -2053,8 +3331,92 @@ if (navigator.mediaDevices && typeof navigator.mediaDevices.addEventListener ===
   });
 }
 
-setActiveTab(false);
+// Room management event listeners
+if (joinRoomTabEl) {
+  joinRoomTabEl.addEventListener('click', () => showRoomTab('join-room'));
+}
+
+if (createRoomTabEl) {
+  createRoomTabEl.addEventListener('click', () => showRoomTab('create-room'));
+}
+
+if (createRoomFormEl) {
+  createRoomFormEl.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const roomName = newRoomNameEl.value.trim();
+    // Use logged-in username as display name
+    const userName = currentUsername || generateRoomUserName();
+
+    createRoomErrorEl.textContent = '';
+
+    try {
+      const response = await fetch(withAuthQuery('/api/rooms'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomName })
+      });
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        createRoomErrorEl.textContent = error.error || 'Failed to create server';
+        return;
+      }
+
+      const data = await response.json();
+      state.currentCreatorId = data.creatorId;
+      const createdRoomId = data && data.room ? data.room.id : null;
+      if (!createdRoomId) {
+        createRoomErrorEl.textContent = 'Server created but room id missing';
+        return;
+      }
+
+      // Join the newly created room
+      await joinRoom(createdRoomId, userName);
+    } catch (err) {
+      createRoomErrorEl.textContent = 'Error creating server';
+    }
+  });
+}
+
+if (adminPageBtn) {
+  adminPageBtn.addEventListener("click", () => {
+    window.location.href = "/admin.html";
+  });
+}
+
+if (roomSelectionModalEl) {
+  // Close modal when clicking outside
+  roomSelectionModalEl.addEventListener('click', (e) => {
+    if (e.target === roomSelectionModalEl) {
+      roomSelectionModalEl.classList.remove('active');
+    }
+  });
+}
+
+setActiveTab("ops");
 populateDeviceSelectors();
+
+// Initialize: check auth and populate user info
+(async () => {
+  const authed = await ensureAuthenticated();
+  if (!authed) return;
+
+  const loggedInUserEl = document.getElementById("loggedInUser");
+  if (loggedInUserEl && currentUsername) {
+    loggedInUserEl.textContent = currentUsername;
+  }
+
+  const logoutBtnEl = document.getElementById("logoutBtn");
+  if (logoutBtnEl) {
+    logoutBtnEl.addEventListener("click", async () => {
+      await fetch("/auth/logout", { method: "POST" });
+      window.location.href = "/login";
+    });
+  }
+
+  // Preload room list for when modal opens
+  loadRoomsList().catch(() => {});
+})();
 
 updateCleanCheckButton();
 setPowerState("off");
